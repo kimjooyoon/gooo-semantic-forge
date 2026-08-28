@@ -98,9 +98,13 @@ jobs:
           chmod +x bin/gooo-semantic-forge scripts/observe-semantic-forge.sh "$kit_conformer"
 
           record_check() {
-            local id=$1 kind=$2 command=$3 digest
-            digest=$(printf '%s' "$command" | sha256sum | awk '{print $1}')
-            jq -S -n --arg id "$id" --arg kind "$kind" --arg command "$command" --arg command_digest "$digest" '{id:$id,kind:$kind,command:$command,command_digest:$command_digest}' >> "$checks"
+            local id=$1 kind=$2 display_command=$3 wall_ms=$4 display_command_sha256
+            display_command_sha256=$(printf '%s' "$display_command" | sha256sum | awk '{print $1}')
+            jq -S -n \
+              --arg id "$id" --arg kind "$kind" --arg display_command "$display_command" \
+              --arg display_command_sha256 "$display_command_sha256" --argjson wall_ms "$wall_ms" '
+              {id:$id,kind:$kind,wall_ms:$wall_ms,display_command:$display_command,display_command_sha256:$display_command_sha256,digest_authority:"NON_AUTHORITATIVE_DISPLAY_METADATA",execution_identity_digest:null,excluded_from_authoritative_decisions:["receipt_reuse","improvement","authorization"]}
+            ' >> "$checks"
           }
 
           jq -S -n '{schema:"gooo/semantic-forge/runtime-authority/v1",repository_writes:0,product_local_tests_run:0,cross_project_required_gates:0,common_generator_authorized:false,product_generation_authorized:false,central_orchestration_authorized:false,product_source_checkouts:0,product_source_files_read:0,product_source_lines_read:0}' > "$input/authority.json"
@@ -115,12 +119,18 @@ jobs:
           fi
 
           current_conformance_start_ns=$(date +%s%N)
+          check_start_ns=$(date +%s%N)
           "$gooo" check --json "$observation" > "$RUNNER_TEMP/observation-syntax.json"
-          record_check GOOO_OBSERVATION_SYNTAX CUSTOM_FORGE_OBSERVATION 'gooo check --json observation.gooo'
+          check_wall_ms=$(( ($(date +%s%N) - check_start_ns) / 1000000 ))
+          record_check GOOO_OBSERVATION_SYNTAX CUSTOM_FORGE_OBSERVATION 'gooo check --json observation.gooo' "$check_wall_ms"
+          check_start_ns=$(date +%s%N)
           "$gooo" check --semantic --json "$observation" > "$RUNNER_TEMP/observation-semantic.json"
-          record_check GOOO_OBSERVATION_SEMANTIC CUSTOM_FORGE_OBSERVATION 'gooo check --semantic --json observation.gooo'
+          check_wall_ms=$(( ($(date +%s%N) - check_start_ns) / 1000000 ))
+          record_check GOOO_OBSERVATION_SEMANTIC CUSTOM_FORGE_OBSERVATION 'gooo check --semantic --json observation.gooo' "$check_wall_ms"
+          check_start_ns=$(date +%s%N)
           "$gooo" graph dump "$observation" > "$RUNNER_TEMP/observation-graph.json"
-          record_check GOOO_OBSERVATION_GRAPH CUSTOM_FORGE_OBSERVATION 'gooo graph dump observation.gooo'
+          check_wall_ms=$(( ($(date +%s%N) - check_start_ns) / 1000000 ))
+          record_check GOOO_OBSERVATION_GRAPH CUSTOM_FORGE_OBSERVATION 'gooo graph dump observation.gooo' "$check_wall_ms"
           source_sha256=$(sha256sum "$observation" | awk '{print $1}')
           graph_sha256=$(sha256sum "$RUNNER_TEMP/observation-graph.json" | awk '{print $1}')
           printf '%s\n' "$source_sha256" > "$RUNNER_TEMP/observation-source-sha256.txt"
@@ -170,14 +180,20 @@ jobs:
           test ! -e "$forbidden"
 
           probe="$RUNNER_TEMP/probe-output"
+          check_start_ns=$(date +%s%N)
           ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$input" "$probe"
-          record_check FORGE_CURRENT_CONFORMANCE CUSTOM_FORGE_CONFORMER 'gooo-semantic-forge observe immutable-acquisition-receipt'
+          check_wall_ms=$(( ($(date +%s%N) - check_start_ns) / 1000000 ))
+          record_check FORGE_CURRENT_CONFORMANCE CUSTOM_FORGE_CONFORMER 'gooo-semantic-forge observe immutable-acquisition-receipt' "$check_wall_ms"
+          check_start_ns=$(date +%s%N)
           "$kit_conformer" "$input/local/bundle-a" "$input/local/bundle-b" "$RUNNER_TEMP/local-kit-conformance.json"
           jq -e '.decision == "CONFORMANT" and .summary.total == 10 and .summary.refuted == 0' "$RUNNER_TEMP/local-kit-conformance.json" >/dev/null
-          record_check RELEASED_KIT_CONFORMER_LOCAL RELEASED_KIT_CONFORMER 'conform-released-envelope-v2 local bundle-a bundle-b'
+          check_wall_ms=$(( ($(date +%s%N) - check_start_ns) / 1000000 ))
+          record_check RELEASED_KIT_CONFORMER_LOCAL RELEASED_KIT_CONFORMER 'conform-released-envelope-v2 local bundle-a bundle-b' "$check_wall_ms"
+          check_start_ns=$(date +%s%N)
           "$kit_conformer" "$input/design/envelope-a" "$input/design/envelope-b" "$RUNNER_TEMP/design-kit-conformance.json"
           jq -e '.decision == "CONFORMANT" and .summary.total == 10 and .summary.refuted == 0' "$RUNNER_TEMP/design-kit-conformance.json" >/dev/null
-          record_check RELEASED_KIT_CONFORMER_DESIGN RELEASED_KIT_CONFORMER 'conform-released-envelope-v2 design envelope-a envelope-b'
+          check_wall_ms=$(( ($(date +%s%N) - check_start_ns) / 1000000 ))
+          record_check RELEASED_KIT_CONFORMER_DESIGN RELEASED_KIT_CONFORMER 'conform-released-envelope-v2 design envelope-a envelope-b' "$check_wall_ms"
           git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/repository-after-probe.bin"
           cmp -s "$RUNNER_TEMP/repository-before.bin" "$RUNNER_TEMP/repository-after-probe.bin"
           current_conformance_end_ns=$(date +%s%N)
@@ -188,8 +204,10 @@ jobs:
           ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$input" "$RUNNER_TEMP/forge-b"
           cmp -s "$RUNNER_TEMP/forge-a/semantic-forge-packet.json" "$RUNNER_TEMP/forge-b/semantic-forge-packet.json"
           cmp -s "$RUNNER_TEMP/forge-a/replay.json" "$RUNNER_TEMP/forge-b/replay.json"
+          check_start_ns=$(date +%s%N)
           npx --yes ajv-cli@5.0.0 validate --spec=draft2020 -s schemas/semantic-forge-packet-v1.schema.json -d "$RUNNER_TEMP/forge-a/semantic-forge-packet.json"
-          record_check FORGE_PACKET_SCHEMA_VALIDATION JSON_SCHEMA_VALIDATION 'ajv draft2020 semantic-forge-packet-v1 forge-a'
+          check_wall_ms=$(( ($(date +%s%N) - check_start_ns) / 1000000 ))
+          record_check FORGE_PACKET_SCHEMA_VALIDATION JSON_SCHEMA_VALIDATION 'ajv draft2020 semantic-forge-packet-v1 forge-a' "$check_wall_ms"
           deterministic_replay_end_ns=$(date +%s%N)
           printf '%s\n' "$(( (deterministic_replay_end_ns - deterministic_replay_start_ns) / 1000000 ))" > "$RUNNER_TEMP/deterministic-replay-wall-ms"
 
@@ -254,7 +272,11 @@ jobs:
           printf '%s\n' "$(( (scenario_evaluation_end_ns - scenario_evaluation_start_ns) / 1000000 ))" > "$RUNNER_TEMP/scenario-evaluation-wall-ms"
 
           jq -S -s '
-            {schema:"gooo/semantic-forge/executed-checks/v1",checks:.,counts:{total:length,custom_forge_observation:([.[]|select(.kind=="CUSTOM_FORGE_OBSERVATION" or .kind=="CUSTOM_FORGE_CONFORMER")]|length),released_kit_conformers:([.[]|select(.kind=="RELEASED_KIT_CONFORMER")]|length),json_schema_validations:([.[]|select(.kind=="JSON_SCHEMA_VALIDATION")]|length)}}
+            def measurement($items): {executions:($items|length),wall_ms:(($items|map(.wall_ms)|add)//0)};
+            [.[]|select(.kind=="CUSTOM_FORGE_OBSERVATION" or .kind=="CUSTOM_FORGE_CONFORMER")] as $custom |
+            [.[]|select(.kind=="RELEASED_KIT_CONFORMER")] as $kit |
+            [.[]|select(.kind=="JSON_SCHEMA_VALIDATION")] as $schema |
+            {schema:"gooo/semantic-forge/executed-checks/v2",command_identity_policy:{display_command_digest_authority:"NON_AUTHORITATIVE_DISPLAY_METADATA",execution_identity_digest:null,excluded_from_authoritative_decisions:["receipt_reuse","improvement","authorization"]},checks:.,counts:{total:length,custom_forge_observation:($custom|length),released_kit_conformers:($kit|length),json_schema_validations:($schema|length)},metrics:{product_builds:{executions:0,wall_ms:0,reason:"NO_PRODUCT_BUILD_REQUIRED"},product_tests:{executions:0,wall_ms:0,reason:"NO_PRODUCT_TEST_REQUIRED"},custom_forge_checks:measurement($custom),released_kit_conformers:measurement($kit),json_schema_validations:measurement($schema)}}
           ' "$checks" > "$RUNNER_TEMP/executed-checks.json"
 
           git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/repository-after.bin"
@@ -286,15 +308,15 @@ jobs:
             --argjson release_receipt_verification_wall_ms "$release_receipt_verification_wall_ms" --argjson current_conformance_wall_ms "$current_conformance_wall_ms" --argjson scenario_evaluation_wall_ms "$scenario_evaluation_wall_ms" --argjson deterministic_replay_wall_ms "$deterministic_replay_wall_ms" --argjson total_wall_ms "$total_wall_ms" \
             --slurpfile receipt_reuse "$RUNNER_TEMP/receipt-reuse.json" --slurpfile executed_checks "$RUNNER_TEMP/executed-checks.json" --slurpfile output_observation "$RUNNER_TEMP/output-observation.json" \
             --argjson regular_files "$regular_files" --argjson descendant_directories "$descendant_directories" --argjson physical_lines "$physical_lines" --argjson go_files "$go_files" --argjson go_lines "$go_lines" --argjson gooo_files "$gooo_files" --argjson gooo_lines "$gooo_lines" '
-            {schema:"gooo/semantic-forge/runtime-observation/v2",subject_sha:$subject_sha,go_version:$go_version,module_roots:$module_roots,go_fix_module_roots:$go_fix_module_roots,repository:{before_digest:$before_digest,after_digest:$after_digest,writes:0},build:{ci_build_executions:0,ci_build_wall_ms:0,reason:"NO_PRODUCT_BUILD_REQUIRED"},upstream_test_receipts:$receipt_reuse[0],executed_checks:$executed_checks[0],current_subject_checks_executed:$executed_checks[0].counts.total,current_cross_product_conformer_executions:$executed_checks[0].counts.released_kit_conformers,custom_forge_observation_checks:$executed_checks[0].counts.custom_forge_observation,authority:{product_local_tests_run:0,cross_project_required_gates:0,common_generator_authorized:false,product_generation_authorized:false,central_orchestration_authorized:false,product_source_checkouts:0,product_source_files_read:0,product_source_lines_read:0},output_observation:$output_observation[0],inventory:{root_readme_excluded:true,regular_files:$regular_files,descendant_directories:$descendant_directories,physical_lines:$physical_lines,go:{files:$go_files,physical_lines:$go_lines},gooo:{files:$gooo_files,physical_lines:$gooo_lines}},performance:{peak_rss_kib:$peak_rss_kib,phase_wall_ms:{release_receipt_verification:$release_receipt_verification_wall_ms,current_conformance:$current_conformance_wall_ms,scenario_evaluation:$scenario_evaluation_wall_ms,deterministic_replay:$deterministic_replay_wall_ms,total:$total_wall_ms}}}
+            {schema:"gooo/semantic-forge/runtime-observation/v3",subject_sha:$subject_sha,go_version:$go_version,module_roots:$module_roots,go_fix_module_roots:$go_fix_module_roots,repository:{before_digest:$before_digest,after_digest:$after_digest,writes:0},build:{ci_build_executions:0,ci_build_wall_ms:0,reason:"NO_PRODUCT_BUILD_REQUIRED"},upstream_test_receipts:$receipt_reuse[0],executed_checks:$executed_checks[0],execution_metrics:$executed_checks[0].metrics,current_subject_checks_executed:$executed_checks[0].counts.total,current_cross_product_conformer_executions:$executed_checks[0].counts.released_kit_conformers,custom_forge_observation_checks:$executed_checks[0].counts.custom_forge_observation,authority:{product_local_tests_run:0,cross_project_required_gates:0,common_generator_authorized:false,product_generation_authorized:false,central_orchestration_authorized:false,product_source_checkouts:0,product_source_files_read:0,product_source_lines_read:0},output_observation:$output_observation[0],inventory:{root_readme_excluded:true,regular_files:$regular_files,descendant_directories:$descendant_directories,physical_lines:$physical_lines,go:{files:$go_files,physical_lines:$go_lines},gooo:{files:$gooo_files,physical_lines:$gooo_lines}},performance:{peak_rss_kib:$peak_rss_kib,phase_wall_ms:{release_receipt_verification:$release_receipt_verification_wall_ms,current_conformance:$current_conformance_wall_ms,scenario_evaluation:$scenario_evaluation_wall_ms,deterministic_replay:$deterministic_replay_wall_ms,total:$total_wall_ms}}}
           ' > "$RUNNER_TEMP/runtime-observation.json"
 
-          jq -e '.build == {ci_build_executions:0,ci_build_wall_ms:0,reason:"NO_PRODUCT_BUILD_REQUIRED"} and .authority.product_source_checkouts==0 and .upstream_test_receipts.upstream_test_receipts_available==2 and .upstream_test_receipts.upstream_test_receipts_reused==0 and .upstream_test_receipts.reexecutions_skipped_due_to_exact_receipt==0 and .upstream_test_receipts.stale_receipts==0 and .upstream_test_receipts.unknown_receipts==2 and .current_subject_checks_executed == (.executed_checks.checks|length) and .current_cross_product_conformer_executions == 2 and .custom_forge_observation_checks == 4 and .executed_checks.counts.json_schema_validations == 1 and ([.performance.phase_wall_ms[] | type == "number" and . >= 0] | all)' "$RUNNER_TEMP/runtime-observation.json" >/dev/null
+          jq -e '.build == {ci_build_executions:0,ci_build_wall_ms:0,reason:"NO_PRODUCT_BUILD_REQUIRED"} and .execution_metrics.product_builds == {executions:0,wall_ms:0,reason:"NO_PRODUCT_BUILD_REQUIRED"} and .execution_metrics.product_tests == {executions:0,wall_ms:0,reason:"NO_PRODUCT_TEST_REQUIRED"} and .authority.product_source_checkouts==0 and .upstream_test_receipts.upstream_test_receipts_available==2 and .upstream_test_receipts.upstream_test_receipts_reused==0 and .upstream_test_receipts.reexecutions_skipped_due_to_exact_receipt==0 and .upstream_test_receipts.stale_receipts==0 and .upstream_test_receipts.unknown_receipts==2 and .current_subject_checks_executed == (.executed_checks.checks|length) and .current_cross_product_conformer_executions == .execution_metrics.released_kit_conformers.executions and .custom_forge_observation_checks == .execution_metrics.custom_forge_checks.executions and .executed_checks.counts.json_schema_validations == .execution_metrics.json_schema_validations.executions and ([.executed_checks.checks[] | (.wall_ms | (type == "number" and . >= 0))] | all) and ([.executed_checks.checks[] | (.digest_authority == "NON_AUTHORITATIVE_DISPLAY_METADATA" and .execution_identity_digest == null and (has("command_digest") | not))] | all) and ([.performance.phase_wall_ms[] | type == "number" and . >= 0] | all)' "$RUNNER_TEMP/runtime-observation.json" >/dev/null
 
           {
             echo "## Gooo Semantic Forge"
             jq -r '"- decision: \(.decision)", "- cells: \(.summary.closed_cells)/\(.summary.total_cells) CLOSED; \(.summary.unknown_cells) UNKNOWN; \(.summary.refuted_cells) REFUTED", "- releases/assets: \(.summary.input_releases.observed)/\(.summary.input_releases.total) / \(.summary.input_assets.observed)/\(.summary.input_assets.total)", "- expected outputs: \(.outputs.expected_total); observed outputs: 2; replay: 2/2, mismatch 0"' "$RUNNER_TEMP/forge-a/semantic-forge-packet.json"
-            jq -r '"- product builds/build ms/reason: \(.build.ci_build_executions)/\(.build.ci_build_wall_ms) \(.build.reason)", "- current checks/custom-kit: \(.current_subject_checks_executed)/\(.custom_forge_observation_checks)/\(.current_cross_product_conformer_executions)", "- peak RSS/phase ms: \(.performance.peak_rss_kib) KiB / \(.performance.phase_wall_ms.release_receipt_verification)/\(.performance.phase_wall_ms.current_conformance)/\(.performance.phase_wall_ms.scenario_evaluation)/\(.performance.phase_wall_ms.deterministic_replay)/\(.performance.phase_wall_ms.total)"' "$RUNNER_TEMP/runtime-observation.json"
+            jq -r '"- product build/test execution-ms: \(.execution_metrics.product_builds.executions)/\(.execution_metrics.product_builds.wall_ms) ; \(.execution_metrics.product_tests.executions)/\(.execution_metrics.product_tests.wall_ms)", "- custom Forge / released kit / schema execution-ms: \(.execution_metrics.custom_forge_checks.executions)/\(.execution_metrics.custom_forge_checks.wall_ms) ; \(.execution_metrics.released_kit_conformers.executions)/\(.execution_metrics.released_kit_conformers.wall_ms) ; \(.execution_metrics.json_schema_validations.executions)/\(.execution_metrics.json_schema_validations.wall_ms)", "- peak RSS/phase ms: \(.performance.peak_rss_kib) KiB / \(.performance.phase_wall_ms.release_receipt_verification)/\(.performance.phase_wall_ms.current_conformance)/\(.performance.phase_wall_ms.scenario_evaluation)/\(.performance.phase_wall_ms.deterministic_replay)/\(.performance.phase_wall_ms.total)"' "$RUNNER_TEMP/runtime-observation.json"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce no repository effect

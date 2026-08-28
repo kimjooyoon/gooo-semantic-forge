@@ -135,9 +135,13 @@ stale receipts. Saved time and speed improvement remain UNKNOWN because no
 exact before/after pair exists. These dynamic measurements stay outside the
 deterministic packet bytes.
 
-The workflow runs for pull requests and pushes to `main`. It records an ID and
-command digest for every current check, distinguishing custom Forge observation
-checks from the two released Interchange-kit conformer executions. Packet JSON
-is validated against its Draft 2020-12 schema in Actions. An exact improvement
-pair is counted only when complete before/after evidence has the same scenario,
-input, contract, and toolchain digests; the current value remains `0/1 UNKNOWN`.
+The workflow runs for pull requests and pushes to `main`. It records an ID,
+measured wall time, and a SHA-256 of each check's display command. That display
+hash is explicitly non-authoritative metadata: it is never an execution
+identity and is excluded from receipt reuse, improvement, and authorization
+decisions. It distinguishes custom Forge checks from the two released
+Interchange-kit conformer executions, while separately recording zero product
+build and test executions. Packet JSON is validated against its Draft 2020-12
+schema in Actions. An exact improvement pair is counted only when complete
+before/after evidence has the same scenario, input, contract, and toolchain
+digests; the current value remains `0/1 UNKNOWN`.
