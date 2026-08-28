@@ -29,13 +29,13 @@ entity OptionalForgeExperimentCell id "gooo://semantic-forge/cell/optional-forge
 
 activity ObserveTwoConsumerBaseline(TwoConsumerBaseline) -> TwoConsumerBaselineCell
 activity ObserveCoreMetaTool(CoreMetaTool) -> CoreMetaToolCell
-activity ObserveLocalProductRelease(LocalProductRelease) -> LocalProductReleaseCell
-activity ObserveDesignProductRelease(DesignProductRelease) -> DesignProductReleaseCell
-activity BindSharedPrimitive(SharedPrimitive) -> SharedPrimitiveCell
-activity BindSharedGraphShape(SharedGraphShape) -> SharedGraphShapeCell
-activity BindSharedResolutionModel(SharedResolutionModel) -> SharedResolutionModelCell
-activity BindSharedArtifactModel(SharedArtifactModel) -> SharedArtifactModelCell
-activity PreserveAggregateUtilityUnknown(AggregateUtilityUnknown) -> AggregateUtilityUnknownCell
-activity PreserveReadOnlyProductAuthority(ReadOnlyProductAuthority) -> ReadOnlyProductAuthorityCell
+activity ObserveLocalProductRelease(CoreMetaToolCell, LocalProductRelease) -> LocalProductReleaseCell
+activity ObserveDesignProductRelease(CoreMetaToolCell, DesignProductRelease) -> DesignProductReleaseCell
+activity BindSharedPrimitive(LocalProductReleaseCell, DesignProductReleaseCell, SharedPrimitive) -> SharedPrimitiveCell
+activity BindSharedGraphShape(LocalProductReleaseCell, DesignProductReleaseCell, SharedGraphShape) -> SharedGraphShapeCell
+activity BindSharedResolutionModel(LocalProductReleaseCell, DesignProductReleaseCell, SharedResolutionModel) -> SharedResolutionModelCell
+activity BindSharedArtifactModel(LocalProductReleaseCell, DesignProductReleaseCell, SharedArtifactModel) -> SharedArtifactModelCell
+activity PreserveAggregateUtilityUnknown(LocalProductReleaseCell, DesignProductReleaseCell, AggregateUtilityUnknown) -> AggregateUtilityUnknownCell
+activity PreserveReadOnlyProductAuthority(LocalProductReleaseCell, DesignProductReleaseCell, ReadOnlyProductAuthority) -> ReadOnlyProductAuthorityCell
 activity BindTwelveMetaActivities(TwelveMetaActivities) -> TwelveMetaActivitiesCell
-activity SelectOptionalForgeExperiment(OptionalForgeExperiment) -> OptionalForgeExperimentCell
+activity SelectOptionalForgeExperiment(TwoConsumerBaselineCell, CoreMetaToolCell, LocalProductReleaseCell, DesignProductReleaseCell, SharedPrimitiveCell, SharedGraphShapeCell, SharedResolutionModelCell, SharedArtifactModelCell, AggregateUtilityUnknownCell, ReadOnlyProductAuthorityCell, OptionalForgeExperiment) -> OptionalForgeExperimentCell

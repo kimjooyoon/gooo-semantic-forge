@@ -1,45 +1,53 @@
 def closed($cell):
   ($cell | del(.closed_reason, .unknown_reason, .refuted_reason)) +
-  {state:"CLOSED", reason:$cell.closed_reason, unknown_class:null, next_operation:"NONE", blocked_by:[], details:[]};
-def refuted($cell; $fact):
-  ($cell | del(.closed_reason, .unknown_reason, .refuted_reason)) +
-  {state:"REFUTED", stage:$cell.stage, step:$cell.step, reason:$fact.reason,
-   unknown_class:null, next_operation:$fact.next_operation, blocked_by:[], details:($fact.details // [])};
-def dependent_unknown($cell; $root):
-  ($cell | del(.closed_reason, .unknown_reason, .refuted_reason)) +
-  {state:"UNKNOWN", stage:"DEPENDENCY", step:"RESOLVE_PRODUCT_DEPENDENCY", reason:"DEPENDENCY_BLOCKED",
-   unknown_class:"DEPENDENCY_BLOCKED", next_operation:"RESOLVE_UNKNOWN_PREDECESSORS",
-   blocked_by:[$root.id], details:[]};
+  {state:"CLOSED", reason:$cell.closed_reason, unknown_class:null, next_operation:"NONE", blocked_by:[], details:[], frontier:[]};
 def direct_unknown($cell; $fact):
   ($cell | del(.closed_reason, .unknown_reason, .refuted_reason)) +
   {state:"UNKNOWN", stage:$fact.stage, step:$fact.step, reason:$fact.reason,
-   unknown_class:$fact.unknown_class, next_operation:$fact.next_operation,
-   blocked_by:$fact.blocked_by, details:[]};
+   unknown_class:"DIRECT_MISSING", next_operation:$fact.next_operation,
+   blocked_by:[], details:[], frontier:[$cell.id]};
+def direct_refuted($cell; $fact):
+  ($cell | del(.closed_reason, .unknown_reason, .refuted_reason)) +
+  {state:"REFUTED", stage:$cell.stage, step:$cell.step, reason:$fact.reason,
+   unknown_class:null, next_operation:$fact.next_operation, blocked_by:[],
+   details:($fact.details // []), frontier:[$cell.id]};
+def dependency_unknown($cell; $frontier):
+  ($cell | del(.closed_reason, .unknown_reason, .refuted_reason)) +
+  {state:"UNKNOWN", stage:"DEPENDENCY", step:"RESOLVE_DECLARED_PREDECESSORS", reason:"DEPENDENCY_BLOCKED",
+   unknown_class:"DEPENDENCY_BLOCKED", next_operation:"RESOLVE_UNKNOWN_PREDECESSORS",
+   blocked_by:$frontier, details:[], frontier:$frontier};
+def dependency_refuted($cell; $frontier):
+  ($cell | del(.closed_reason, .unknown_reason, .refuted_reason)) +
+  {state:"REFUTED", stage:"DEPENDENCY", step:"RESOLVE_DECLARED_PREDECESSORS", reason:"DEPENDENCY_REFUTED",
+   unknown_class:null, next_operation:"RESTORE_REFUTED_PREDECESSORS", blocked_by:[],
+   details:$frontier, frontier:$frontier};
 def activity_bound($graph; $activity):
   ([$graph.nodes[]? | select(.kind == "Activity" and .name == $activity)] | length) == 1;
 
 ($denominator[0]) as $d |
 ($graph[0]) as $g |
 ($facts[0]) as $f |
-def product_dependent($id):
-  ["DESIGN_PRODUCT_RELEASE", "SHARED_PRIMITIVE", "SHARED_GRAPH_SHAPE", "SHARED_RESOLUTION_MODEL", "SHARED_ARTIFACT_MODEL", "AGGREGATE_UTILITY_UNKNOWN", "READ_ONLY_PRODUCT_AUTHORITY", "OPTIONAL_FORGE_EXPERIMENT"] | index($id) != null;
-def first_product_unknown:
-  ([
-    {id:"LOCAL_PRODUCT_RELEASE", fact:$f.facts.LOCAL_PRODUCT_RELEASE},
-    {id:"DESIGN_PRODUCT_RELEASE", fact:$f.facts.DESIGN_PRODUCT_RELEASE}
-  ] | map(select(.fact.state == "UNKNOWN")) | first);
-def evaluate($cell):
+def cell($id): $d.cells[] | select(.id == $id);
+def direct($cell):
   $f.facts[$cell.id] as $fact |
-  first_product_unknown as $product_unknown |
   if activity_bound($g; $cell.activity) | not then
-    refuted($cell; {reason:"GOOO_META_ACTIVITY_MISSING", next_operation:"RESTORE_GOOO_META_ACTIVITY", details:[]})
-  elif $fact.state == "REFUTED" then refuted($cell; $fact)
-  elif product_dependent($cell.id) and $product_unknown != null then
-    if $cell.id == $product_unknown.id then direct_unknown($cell; $product_unknown.fact)
-    else dependent_unknown($cell; $product_unknown) end
+    direct_refuted($cell; {reason:"GOOO_META_ACTIVITY_OR_CAUSAL_EDGE_MISMATCH", next_operation:"RESTORE_PINNED_GOOO_GRAPH_BINDING", details:[]})
+  elif $fact.state == "REFUTED" then direct_refuted($cell; $fact)
   elif $fact.state == "UNKNOWN" then direct_unknown($cell; $fact)
   else closed($cell) end;
-($d.cells | map(evaluate(.))) as $cells |
+def evaluate($id):
+  cell($id) as $cell |
+  [$cell.depends_on[] | evaluate(.)] as $dependencies |
+  direct($cell) as $own |
+  ([$dependencies[] | select(.state == "REFUTED") | .frontier[]] | unique | sort) as $refuted_frontier |
+  ([$dependencies[] | select(.state == "UNKNOWN") | .frontier[]] | unique | sort) as $unknown_frontier |
+  if $own.state == "REFUTED" then $own
+  elif ($refuted_frontier | length) > 0 then dependency_refuted($cell; $refuted_frontier)
+  elif $own.state == "UNKNOWN" then $own
+  elif ($unknown_frontier | length) > 0 then dependency_unknown($cell; $unknown_frontier)
+  else $own end;
+($d.cells | map(evaluate(.id))) as $evaluated_cells |
+($evaluated_cells | map(del(.frontier))) as $cells |
 ([$cells[] | select(.state == "CLOSED")] | length) as $closed |
 ([$cells[] | select(.state == "UNKNOWN")] | length) as $unknown |
 ([$cells[] | select(.state == "REFUTED")] | length) as $refuted |
@@ -59,8 +67,7 @@ def evaluate($cell):
     total_cells:12, closed_cells:$closed, unknown_cells:$unknown, refuted_cells:$refuted,
     activities_bound:([$d.cells[] | select(activity_bound($g; .activity))] | length), activities_total:12,
     scenarios:{normal:1, unknown:1, refuted:5},
-    input_releases:$f.input_counts.releases, input_assets:$f.input_counts.assets,
-    output_artifacts:{observed:2, total:2}, replay_comparisons:{observed:2, total:2, mismatches:0}
+    input_releases:$f.input_counts.releases, input_assets:$f.input_counts.assets
   },
   proofs:(["FOUNDATION", "COHERENCE", "REGRESSION"] | map(. as $choice | {choice:$choice, closed:([$cells[] | select(.proof_choice == $choice and .state == "CLOSED")] | length), total:([$cells[] | select(.proof_choice == $choice)] | length)})),
   indicator_classes:(["DRIVER", "OUTCOME", "GUARDRAIL"] | map(. as $class | {class:$class, closed:([$cells[] | select(.indicator_class == $class and .state == "CLOSED")] | length), total:([$cells[] | select(.indicator_class == $class)] | length)})),
@@ -78,6 +85,8 @@ def evaluate($cell):
     central_orchestration_authorized:$f.authority.central_orchestration_authorized,
     output_scope:"CALLER_OWNED_TEMP_OR_OUTPUT_ONLY"
   },
-  outputs:{observed:2, total:2, names:["semantic-forge-packet.json", "replay.json"]},
+  acquisition:$f.acquisition,
+  outputs:{expected_total:2, expected_names:["semantic-forge-packet.json", "replay.json"]},
+  replay:{expected_comparisons:2, method:["BYTE_IDENTICAL_PACKET", "SHA256_PACKET"]},
   cells:$cells
 }

@@ -2,6 +2,8 @@ name: Semantic Forge read-only conformance
 
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -22,10 +24,10 @@ jobs:
           go-version: 1.27.x
           check-latest: true
 
-      - name: Bind exact pull-request identity
+      - name: Bind exact revision identity
         run: test "$(git rev-parse HEAD)" = "$SUBJECT_SHA"
 
-      - name: Download and verify immutable public releases
+      - name: Acquire and verify immutable public releases
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -33,13 +35,13 @@ jobs:
           set -euo pipefail
           total_start_ns=$(date +%s%N)
           printf '%s\n' "$total_start_ns" > "$RUNNER_TEMP/semantic-forge-total-start-ns"
-          release_receipt_verification_start_ns=$(date +%s%N)
+          phase_start_ns=$(date +%s%N)
           lock=contracts/semantic-forge-release-lock-v1.json
           input="$RUNNER_TEMP/semantic-forge-input"
-          mkdir -p "$input/release" "$input/core" "$input/interchange" "$input/local" "$input/design"
+          mkdir -p "$input/release" "$input/raw" "$input/core" "$input/interchange" "$input/local" "$input/design"
 
           fetch_release() {
-            scope=$1
+            local scope=$1 repository tag target release_id prerelease
             repository=$(jq -r --arg scope "$scope" '.[$scope].repository' "$lock")
             tag=$(jq -r --arg scope "$scope" '.[$scope].tag' "$lock")
             target=$(jq -r --arg scope "$scope" '.[$scope].target_commit_sha' "$lock")
@@ -48,23 +50,18 @@ jobs:
             gh api "repos/$repository/releases/tags/$tag" > "$input/release/$scope.json"
             gh api "repos/$repository/git/ref/tags/$tag" > "$RUNNER_TEMP/$scope-ref.json"
             jq -e --arg tag "$tag" --arg target "$target" --argjson release_id "$release_id" --argjson prerelease "$prerelease" '
-              .id == $release_id and .tag_name == $tag and .target_commitish == $target and
-              .draft == false and .prerelease == $prerelease
+              .id == $release_id and .tag_name == $tag and .target_commitish == $target and .draft == false and .prerelease == $prerelease
             ' "$input/release/$scope.json" >/dev/null
             jq -e --arg target "$target" '.object.type == "commit" and .object.sha == $target' "$RUNNER_TEMP/$scope-ref.json" >/dev/null
           }
 
           download_asset() {
-            scope=$1
-            selector=$2
-            destination=$3
+            local scope=$1 selector=$2 destination=$3 name id size sha url
             name=$(jq -r --arg scope "$scope" --arg selector "$selector" '.[$scope].assets[$selector].name' "$lock")
             id=$(jq -r --arg scope "$scope" --arg selector "$selector" '.[$scope].assets[$selector].id' "$lock")
             size=$(jq -r --arg scope "$scope" --arg selector "$selector" '.[$scope].assets[$selector].size' "$lock")
             sha=$(jq -r --arg scope "$scope" --arg selector "$selector" '.[$scope].assets[$selector].sha256' "$lock")
-            jq -e --arg name "$name" --argjson id "$id" --argjson size "$size" --arg digest "sha256:$sha" '
-              any(.assets[]?; .id == $id and .name == $name and .size == $size and .digest == $digest)
-            ' "$input/release/$scope.json" >/dev/null
+            jq -e --arg name "$name" --argjson id "$id" --argjson size "$size" --arg digest "sha256:$sha" 'any(.assets[]?; .id == $id and .name == $name and .size == $size and .digest == $digest)' "$input/release/$scope.json" >/dev/null
             url=$(jq -r --argjson id "$id" '.assets[] | select(.id == $id) | .browser_download_url' "$input/release/$scope.json")
             curl --fail --location --retry 3 "$url" --output "$destination"
             test "$(wc -c < "$destination" | tr -d ' ')" -eq "$size"
@@ -72,109 +69,41 @@ jobs:
           }
 
           for scope in core interchange local design; do fetch_release "$scope"; done
-          download_asset core binary "$input/core/gooo-linux-amd64.tar.gz"
-          download_asset core checksums "$input/core/SHA256SUMS"
-          download_asset interchange consumer_kit "$input/interchange/gooo-interchange-consumer-kit-v2.tar.gz"
-          download_asset local ci_artifact "$input/local/local-ci-artifact.zip"
-          download_asset design ci_artifact "$input/design/design-ci-artifact.zip"
+          download_asset core binary "$input/raw/gooo-linux-amd64.tar.gz"
+          download_asset core checksums "$input/raw/SHA256SUMS"
+          download_asset interchange consumer_kit "$input/raw/gooo-interchange-consumer-kit-v2.tar.gz"
+          download_asset local ci_artifact "$input/raw/local-released-domain-envelope-v2-ci-artifact.zip"
+          download_asset design ci_artifact "$input/raw/design-released-domain-envelope-v2-ci-artifact.zip"
 
           binary_name=$(jq -r '.core.assets.binary.name' "$lock")
-          test "$(sha256sum "$input/core/gooo-linux-amd64.tar.gz" | awk '{print $1}')" = "$(awk -v name="$binary_name" '$2 == name {print $1}' "$input/core/SHA256SUMS")"
-          tar -xzf "$input/core/gooo-linux-amd64.tar.gz" -C "$input/core"
+          test "$(sha256sum "$input/raw/gooo-linux-amd64.tar.gz" | awk '{print $1}')" = "$(awk -v name="$binary_name" '$2 == name {print $1}' "$input/raw/SHA256SUMS")"
+          tar -xzf "$input/raw/gooo-linux-amd64.tar.gz" -C "$input/core"
           chmod +x "$input/core/gooo"
-          tar -xzf "$input/interchange/gooo-interchange-consumer-kit-v2.tar.gz" -C "$input/interchange"
-          unzip -q "$input/local/local-ci-artifact.zip" -d "$input/local"
-          unzip -q "$input/design/design-ci-artifact.zip" -d "$input/design"
-          release_receipt_verification_end_ns=$(date +%s%N)
-          printf '%s\n' "$(( (release_receipt_verification_end_ns - release_receipt_verification_start_ns) / 1000000 ))" > "$RUNNER_TEMP/release-receipt-verification-wall-ms"
+          tar -xzf "$input/raw/gooo-interchange-consumer-kit-v2.tar.gz" -C "$input/interchange"
+          unzip -q "$input/raw/local-released-domain-envelope-v2-ci-artifact.zip" -d "$input/local"
+          unzip -q "$input/raw/design-released-domain-envelope-v2-ci-artifact.zip" -d "$input/design"
+          phase_end_ns=$(date +%s%N)
+          printf '%s\n' "$(( (phase_end_ns - phase_start_ns) / 1000000 ))" > "$RUNNER_TEMP/release-receipt-verification-wall-ms"
 
-      - name: Observe only through released receipts
+      - name: Observe receipts, graph, and optional conformers
         shell: bash
         run: |
           set -euo pipefail
           input="$RUNNER_TEMP/semantic-forge-input"
           gooo="$input/core/gooo"
           observation=examples/semantic-forge-v1/observation.gooo
-          chmod +x bin/gooo-semantic-forge scripts/observe-semantic-forge.sh
+          kit_conformer="$input/interchange/consumer-kit-v2/scripts/conform-released-envelope-v2.sh"
+          checks="$RUNNER_TEMP/executed-checks.ndjson"
+          : > "$checks"
+          chmod +x bin/gooo-semantic-forge scripts/observe-semantic-forge.sh "$kit_conformer"
 
-          # This is the current Forge-run authority observation. It is created
-          # before the conformer probe, then checked against the unchanged worktree.
-          jq -S -n '{
-            schema:"gooo/semantic-forge/runtime-authority/v1",
-            repository_writes:0,
-            product_local_tests_run:0,
-            cross_project_required_gates:0,
-            common_generator_authorized:false,
-            product_generation_authorized:false,
-            central_orchestration_authorized:false,
-            product_source_checkouts:0,
-            product_source_files_read:0,
-            product_source_lines_read:0
-          }' > "$input/authority.json"
+          record_check() {
+            local id=$1 kind=$2 command=$3 digest
+            digest=$(printf '%s' "$command" | sha256sum | awk '{print $1}')
+            jq -S -n --arg id "$id" --arg kind "$kind" --arg command "$command" --arg command_digest "$digest" '{id:$id,kind:$kind,command:$command,command_digest:$command_digest}' >> "$checks"
+          }
 
-          # The two upstream CI artifacts are available, but their immutable
-          # receipts do not carry a command digest. Reuse therefore remains
-          # UNKNOWN: CLOSED requires all four digests to be present and equal.
-          jq -S -n \
-            --slurpfile lock contracts/semantic-forge-release-lock-v1.json \
-            --slurpfile local_report "$input/local/adoption-report.json" \
-            --slurpfile local_immutable "$input/local/immutable-inputs.json" \
-            --slurpfile design_report "$input/design/envelope-adoption-report.json" \
-            --slurpfile design_immutable "$input/design/immutable-inputs.json" '
-              ($lock[0]) as $lock |
-              def receipt($product; $subject; $contract; $toolchain; $expected_subject):
-                {
-                  product:$product,
-                  source:"UPSTREAM_RELEASED_CI_ARTIFACT",
-                  digests:{
-                    subject_digest:$subject,
-                    contract_digest:$contract,
-                    toolchain_digest:$toolchain,
-                    command_digest:null
-                  },
-                  expected:{
-                    subject_digest:$expected_subject,
-                    contract_digest:$lock.interchange.assets.consumer_kit.sha256,
-                    toolchain_digest:$lock.core.assets.binary.sha256,
-                    command_digest:"REQUIRED_BUT_NOT_PRESENT_IN_RELEASED_RECEIPT"
-                  }
-                };
-              [
-                receipt("LOCAL_PRODUCT_RELEASE"; $local_report[0].subject_sha; $local_immutable[0].kit.asset_sha256; $local_immutable[0].core.asset_sha256; $lock.local.target_commit_sha),
-                receipt("DESIGN_PRODUCT_RELEASE"; $design_report[0].subject_sha; $design_immutable[0].specification.consumer_kit_asset_sha256; $design_immutable[0].core.asset_sha256; $lock.design.target_commit_sha)
-              ] |
-              map(. as $receipt |
-                ($receipt + {
-                  comparison:{
-                    subject_digest:($receipt.digests.subject_digest != null and $receipt.digests.subject_digest == $receipt.expected.subject_digest),
-                    contract_digest:($receipt.digests.contract_digest != null and $receipt.digests.contract_digest == $receipt.expected.contract_digest),
-                    toolchain_digest:($receipt.digests.toolchain_digest != null and $receipt.digests.toolchain_digest == $receipt.expected.toolchain_digest),
-                    command_digest:false
-                  }
-                }) |
-                if .comparison.subject_digest == false or .comparison.contract_digest == false or .comparison.toolchain_digest == false then
-                  . + {state:"STALE", reuse:"NOT_REUSED", reason:"RECEIPT_DIGEST_MISMATCH"}
-                elif .digests.command_digest == null then
-                  . + {state:"UNKNOWN", reuse:"NOT_REUSED", reason:"COMMAND_DIGEST_UNAVAILABLE"}
-                elif (.comparison | [.subject_digest,.contract_digest,.toolchain_digest,.command_digest] | all) then
-                  . + {state:"CLOSED", reuse:"REUSED", reason:"EXACT_RECEIPT_MATCH"}
-                else
-                  . + {state:"STALE", reuse:"NOT_REUSED", reason:"RECEIPT_DIGEST_MISMATCH"}
-                end
-              ) as $records |
-              {
-                schema:"gooo/semantic-forge/upstream-test-receipt-reuse/v1",
-                closure_rule:"subject_digest+contract_digest+toolchain_digest+command_digest all present and equal",
-                upstream_test_receipts_available:($records | length),
-                upstream_test_receipts_reused:([$records[] | select(.state == "CLOSED")] | length),
-                reexecutions_skipped_due_to_exact_receipt:([$records[] | select(.state == "CLOSED")] | length),
-                stale_receipts:([$records[] | select(.state == "STALE")] | length),
-                unknown_receipts:([$records[] | select(.state == "UNKNOWN")] | length),
-                records:$records
-              }
-            ' > "$RUNNER_TEMP/receipt-reuse.json"
-
-          current_conformance_start_ns=$(date +%s%N)
+          jq -S -n '{schema:"gooo/semantic-forge/runtime-authority/v1",repository_writes:0,product_local_tests_run:0,cross_project_required_gates:0,common_generator_authorized:false,product_generation_authorized:false,central_orchestration_authorized:false,product_source_checkouts:0,product_source_files_read:0,product_source_lines_read:0}' > "$input/authority.json"
 
           module_roots=$(find . -name go.mod -not -path './.git/*' | wc -l | tr -d ' ')
           go_fix_module_roots=0
@@ -185,55 +114,124 @@ jobs:
             done < <(find . -name go.mod -not -path './.git/*' -print0)
           fi
 
+          current_conformance_start_ns=$(date +%s%N)
           "$gooo" check --json "$observation" > "$RUNNER_TEMP/observation-syntax.json"
+          record_check GOOO_OBSERVATION_SYNTAX CUSTOM_FORGE_OBSERVATION 'gooo check --json observation.gooo'
           "$gooo" check --semantic --json "$observation" > "$RUNNER_TEMP/observation-semantic.json"
+          record_check GOOO_OBSERVATION_SEMANTIC CUSTOM_FORGE_OBSERVATION 'gooo check --semantic --json observation.gooo'
           "$gooo" graph dump "$observation" > "$RUNNER_TEMP/observation-graph.json"
+          record_check GOOO_OBSERVATION_GRAPH CUSTOM_FORGE_OBSERVATION 'gooo graph dump observation.gooo'
+          source_sha256=$(sha256sum "$observation" | awk '{print $1}')
+          graph_sha256=$(sha256sum "$RUNNER_TEMP/observation-graph.json" | awk '{print $1}')
+          printf '%s\n' "$source_sha256" > "$RUNNER_TEMP/observation-source-sha256.txt"
+          printf '%s\n' "$graph_sha256" > "$RUNNER_TEMP/observation-graph-sha256.txt"
+
+          jq -S -n \
+            --arg source_sha256 "$source_sha256" --arg graph_sha256 "$graph_sha256" \
+            --arg core_binary_sha256 "$(jq -r '.core.assets.binary.sha256' contracts/semantic-forge-release-lock-v1.json)" \
+            --arg core_checksums_sha256 "$(jq -r '.core.assets.checksums.sha256' contracts/semantic-forge-release-lock-v1.json)" \
+            --arg interchange_sha256 "$(jq -r '.interchange.assets.consumer_kit.sha256' contracts/semantic-forge-release-lock-v1.json)" \
+            --arg local_sha256 "$(jq -r '.local.assets.ci_artifact.sha256' contracts/semantic-forge-release-lock-v1.json)" \
+            --arg design_sha256 "$(jq -r '.design.assets.ci_artifact.sha256' contracts/semantic-forge-release-lock-v1.json)" '
+            {schema:"gooo/semantic-forge/immutable-acquisition-receipt/v1",observation:{source_sha256:$source_sha256,graph_sha256:$graph_sha256},archives:{core_binary:{sha256:$core_binary_sha256},core_checksums:{sha256:$core_checksums_sha256},interchange_consumer_kit:{sha256:$interchange_sha256},local_ci_artifact:{sha256:$local_sha256},design_ci_artifact:{sha256:$design_sha256}},members:{}}
+          ' > "$input/acquisition-receipt.json"
+          members=(
+            release/core.json release/interchange.json release/local.json release/design.json
+            interchange/consumer-kit-v2/manifest.json
+            local/adoption-report.json local/final-facts.json local/meta-graph.json local/immutable-inputs.json local/bundle-a/replay.json local/bundle-b/replay.json
+            design/envelope-adoption-report.json design/envelope-facts.json design/envelope-graph.json design/immutable-inputs.json design/envelope-a/replay.json design/envelope-b/replay.json
+          )
+          for member in "${members[@]}"; do
+            digest=$(sha256sum "$input/$member" | awk '{print $1}')
+            jq -S --arg member "$member" --arg digest "$digest" '.members[$member]=$digest' "$input/acquisition-receipt.json" > "$input/acquisition-receipt.next.json"
+            mv "$input/acquisition-receipt.next.json" "$input/acquisition-receipt.json"
+          done
+
+          jq -S -n \
+            --slurpfile lock contracts/semantic-forge-release-lock-v1.json \
+            --slurpfile local_report "$input/local/adoption-report.json" --slurpfile local_immutable "$input/local/immutable-inputs.json" \
+            --slurpfile design_report "$input/design/envelope-adoption-report.json" --slurpfile design_immutable "$input/design/immutable-inputs.json" '
+              ($lock[0]) as $lock |
+              def receipt($product; $subject; $contract; $toolchain; $expected_subject):
+                {product:$product,source:"UPSTREAM_RELEASED_CI_ARTIFACT",digests:{subject_digest:$subject,contract_digest:$contract,toolchain_digest:$toolchain,command_digest:null},expected:{subject_digest:$expected_subject,contract_digest:$lock.interchange.assets.consumer_kit.sha256,toolchain_digest:$lock.core.assets.binary.sha256,command_digest:"REQUIRED_BUT_NOT_PRESENT_IN_RELEASED_RECEIPT"}};
+              [receipt("LOCAL_PRODUCT_RELEASE"; $local_report[0].subject_sha; $local_immutable[0].kit.asset_sha256; $local_immutable[0].core.asset_sha256; $lock.local.target_commit_sha),receipt("DESIGN_PRODUCT_RELEASE"; $design_report[0].subject_sha; $design_immutable[0].specification.consumer_kit_asset_sha256; $design_immutable[0].core.asset_sha256; $lock.design.target_commit_sha)] |
+              map(. as $receipt | ($receipt + {comparison:{subject_digest:($receipt.digests.subject_digest != null and $receipt.digests.subject_digest == $receipt.expected.subject_digest),contract_digest:($receipt.digests.contract_digest != null and $receipt.digests.contract_digest == $receipt.expected.contract_digest),toolchain_digest:($receipt.digests.toolchain_digest != null and $receipt.digests.toolchain_digest == $receipt.expected.toolchain_digest),command_digest:false}}) + (if .digests.command_digest == null then {state:"UNKNOWN",reuse:"NOT_REUSED",reason:"COMMAND_DIGEST_UNAVAILABLE"} elif (.comparison | [.subject_digest,.contract_digest,.toolchain_digest,.command_digest] | all) then {state:"CLOSED",reuse:"REUSED",reason:"EXACT_RECEIPT_MATCH"} else {state:"STALE",reuse:"NOT_REUSED",reason:"RECEIPT_DIGEST_MISMATCH"} end)) as $records |
+              {schema:"gooo/semantic-forge/upstream-test-receipt-reuse/v1",closure_rule:"subject_digest+contract_digest+toolchain_digest+command_digest all present and equal",upstream_test_receipts_available:($records|length),upstream_test_receipts_reused:([$records[]|select(.state=="CLOSED")]|length),reexecutions_skipped_due_to_exact_receipt:([$records[]|select(.state=="CLOSED")]|length),stale_receipts:([$records[]|select(.state=="STALE")]|length),unknown_receipts:([$records[]|select(.state=="UNKNOWN")]|length),records:$records}
+            ' > "$RUNNER_TEMP/receipt-reuse.json"
 
           git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/repository-before.bin"
+          forbidden="$GITHUB_WORKSPACE/semantic-forge-forbidden-output"
+          if ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$input" "$forbidden"; then
+            echo "Forge accepted repository-owned output" >&2
+            exit 1
+          else
+            test "$?" -eq 73
+          fi
+          test ! -e "$forbidden"
+
           probe="$RUNNER_TEMP/probe-output"
           ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$input" "$probe"
+          record_check FORGE_CURRENT_CONFORMANCE CUSTOM_FORGE_CONFORMER 'gooo-semantic-forge observe immutable-acquisition-receipt'
+          "$kit_conformer" "$input/local/bundle-a" "$input/local/bundle-b" "$RUNNER_TEMP/local-kit-conformance.json"
+          jq -e '.decision == "CONFORMANT" and .summary.total == 10 and .summary.refuted == 0' "$RUNNER_TEMP/local-kit-conformance.json" >/dev/null
+          record_check RELEASED_KIT_CONFORMER_LOCAL RELEASED_KIT_CONFORMER 'conform-released-envelope-v2 local bundle-a bundle-b'
+          "$kit_conformer" "$input/design/envelope-a" "$input/design/envelope-b" "$RUNNER_TEMP/design-kit-conformance.json"
+          jq -e '.decision == "CONFORMANT" and .summary.total == 10 and .summary.refuted == 0' "$RUNNER_TEMP/design-kit-conformance.json" >/dev/null
+          record_check RELEASED_KIT_CONFORMER_DESIGN RELEASED_KIT_CONFORMER 'conform-released-envelope-v2 design envelope-a envelope-b'
           git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/repository-after-probe.bin"
           cmp -s "$RUNNER_TEMP/repository-before.bin" "$RUNNER_TEMP/repository-after-probe.bin"
-
           current_conformance_end_ns=$(date +%s%N)
           printf '%s\n' "$(( (current_conformance_end_ns - current_conformance_start_ns) / 1000000 ))" > "$RUNNER_TEMP/current-conformance-wall-ms"
 
           deterministic_replay_start_ns=$(date +%s%N)
-          /usr/bin/time -v -o "$RUNNER_TEMP/forge-time.txt" \
-            ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$input" "$RUNNER_TEMP/forge-a"
+          /usr/bin/time -v -o "$RUNNER_TEMP/forge-time.txt" ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$input" "$RUNNER_TEMP/forge-a"
           ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$input" "$RUNNER_TEMP/forge-b"
           cmp -s "$RUNNER_TEMP/forge-a/semantic-forge-packet.json" "$RUNNER_TEMP/forge-b/semantic-forge-packet.json"
           cmp -s "$RUNNER_TEMP/forge-a/replay.json" "$RUNNER_TEMP/forge-b/replay.json"
+          npx --yes ajv-cli@5.0.0 validate --spec=draft2020 -s schemas/semantic-forge-packet-v1.schema.json -d "$RUNNER_TEMP/forge-a/semantic-forge-packet.json"
+          record_check FORGE_PACKET_SCHEMA_VALIDATION JSON_SCHEMA_VALIDATION 'ajv draft2020 semantic-forge-packet-v1 forge-a'
           deterministic_replay_end_ns=$(date +%s%N)
           printf '%s\n' "$(( (deterministic_replay_end_ns - deterministic_replay_start_ns) / 1000000 ))" > "$RUNNER_TEMP/deterministic-replay-wall-ms"
 
+          output_names=$(find "$RUNNER_TEMP/forge-a" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort | jq -R . | jq -s .)
+          output_count=$(find "$RUNNER_TEMP/forge-a" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')
+          packet_sha256=$(sha256sum "$RUNNER_TEMP/forge-a/semantic-forge-packet.json" | awk '{print $1}')
+          replay_sha256=$(sha256sum "$RUNNER_TEMP/forge-a/replay.json" | awk '{print $1}')
+          jq -S -n --arg packet_sha256 "$packet_sha256" --arg replay_sha256 "$replay_sha256" --argjson names "$output_names" --argjson observed "$output_count" --slurpfile replay "$RUNNER_TEMP/forge-a/replay.json" '
+            {schema:"gooo/semantic-forge/output-observation/v1",output_artifacts:{observed:$observed,names:$names},replay:$replay[0],file_sha256:{"semantic-forge-packet.json":$packet_sha256,"replay.json":$replay_sha256}}
+          ' > "$RUNNER_TEMP/output-observation.json"
+
           scenario_evaluation_start_ns=$(date +%s%N)
-          unknown_input="$RUNNER_TEMP/unknown-input"
-          cp -R "$input" "$unknown_input"
-          rm "$unknown_input/release/design.json"
-          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$unknown_input" "$RUNNER_TEMP/unknown-output"
+          core_missing="$RUNNER_TEMP/core-missing-input"
+          cp -R "$input" "$core_missing"
+          rm "$core_missing/release/core.json"
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$core_missing" "$RUNNER_TEMP/core-missing-output"
+          local_missing="$RUNNER_TEMP/local-missing-input"
+          cp -R "$input" "$local_missing"
+          rm "$local_missing/release/local.json"
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$local_missing" "$RUNNER_TEMP/local-missing-output"
+          design_missing="$RUNNER_TEMP/design-missing-input"
+          cp -R "$input" "$design_missing"
+          rm "$design_missing/release/design.json"
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$design_missing" "$RUNNER_TEMP/unknown-output"
 
-          primitive_input="$RUNNER_TEMP/primitive-input"
-          cp -R "$input" "$primitive_input"
-          jq '.core.asset_sha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"' "$primitive_input/design/immutable-inputs.json" > "$primitive_input/design/immutable-inputs.next.json"
-          mv "$primitive_input/design/immutable-inputs.next.json" "$primitive_input/design/immutable-inputs.json"
-          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$primitive_input" "$RUNNER_TEMP/primitive-output"
-
+          contradiction="$RUNNER_TEMP/release-contradiction-input"
+          cp -R "$input" "$contradiction"
+          jq '.target_commitish = "0000000000000000000000000000000000000000"' "$contradiction/release/local.json" > "$contradiction/release/local.next.json"
+          mv "$contradiction/release/local.next.json" "$contradiction/release/local.json"
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$contradiction" "$RUNNER_TEMP/contradiction-output"
           utility_input="$RUNNER_TEMP/utility-input"
           cp -R "$input" "$utility_input"
           jq '.adoption.external_utility.observed = 1 | .adoption.external_utility.state = "CLOSED"' "$utility_input/design/envelope-adoption-report.json" > "$utility_input/design/envelope-adoption-report.next.json"
           mv "$utility_input/design/envelope-adoption-report.next.json" "$utility_input/design/envelope-adoption-report.json"
           ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$utility_input" "$RUNNER_TEMP/utility-output"
-
           authority_input="$RUNNER_TEMP/authority-input"
           cp -R "$input" "$authority_input"
           jq '.authority.product_generation_authorized = true' "$authority_input/design/envelope-adoption-report.json" > "$authority_input/design/envelope-adoption-report.next.json"
           mv "$authority_input/design/envelope-adoption-report.next.json" "$authority_input/design/envelope-adoption-report.json"
           ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$authority_input" "$RUNNER_TEMP/authority-output"
-
-          jq 'del(.nodes[] | select(.kind == "Activity" and .name == "BindTwelveMetaActivities"))' "$RUNNER_TEMP/observation-graph.json" > "$RUNNER_TEMP/missing-meta-graph.json"
-          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/missing-meta-graph.json" "$input" "$RUNNER_TEMP/meta-output"
-
+          jq 'del(.relations[] | select(.predicate == "used") | select(.object == "gooo://semantic-forge/cell/core-meta-tool") | select(.subject | contains("observe-local-product-release")))' "$RUNNER_TEMP/observation-graph.json" > "$RUNNER_TEMP/broken-causal-graph.json"
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/broken-causal-graph.json" "$input" "$RUNNER_TEMP/causal-output"
           invalid_input="$RUNNER_TEMP/invalid-input"
           cp -R "$input" "$invalid_input"
           jq '.decision = "UNRECOGNIZED_TOP_LEVEL_DECISION"' "$invalid_input/local/adoption-report.json" > "$invalid_input/local/adoption-report.next.json"
@@ -242,40 +240,22 @@ jobs:
           mv "$invalid_input/local/final-facts.next.json" "$invalid_input/local/final-facts.json"
           ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$invalid_input" "$RUNNER_TEMP/invalid-output"
 
-          jq -e '
-            .decision == "BUILD_READ_ONLY" and .claim.state == "CLOSED" and
-            .summary.closed_cells == 12 and .summary.unknown_cells == 0 and .summary.refuted_cells == 0 and
-            .summary.activities_bound == 12 and .summary.activities_total == 12 and
-            .summary.input_releases.observed == 4 and .summary.input_releases.total == 4 and
-            .summary.input_assets.observed == 5 and .summary.input_assets.total == 5 and
-            .summary.output_artifacts.observed == 2 and .summary.output_artifacts.total == 2 and
-            .summary.replay_comparisons.observed == 2 and .summary.replay_comparisons.total == 2 and .summary.replay_comparisons.mismatches == 0 and
-            .utility == {declarations:2,evidence:0,state:"UNKNOWN"} and
-            .improvement.exact_before_after_pairs == {observed:0,total:1} and .improvement.state == "UNKNOWN" and
-            .authority.repository_writes == 0 and .authority.product_local_tests_run == 0 and .authority.cross_project_required_gates == 0 and
-            .authority.common_generator_authorized == false and .authority.product_generation_authorized == false and .authority.central_orchestration_authorized == false and
-            .authority.product_source_checkouts == 0 and .authority.product_source_files_read == 0 and .authority.product_source_lines_read == 0 and
-            ([.proofs[] | select(.closed == 4 and .total == 4)] | length) == 3 and
-            ([.indicator_classes[] | select(.closed == 4 and .total == 4)] | length) == 3 and
-            ([.cells[].activity] | unique | length) == 12
-          ' "$RUNNER_TEMP/forge-a/semantic-forge-packet.json" >/dev/null
-          jq -e '.comparisons_satisfied == 2 and .comparisons_total == 2 and .mismatches == 0' "$RUNNER_TEMP/forge-a/replay.json" >/dev/null
-          jq -e '
-            .decision == "DEFER" and .claim.state == "UNKNOWN" and
-            .claim.stage == "PRODUCT_RELEASE" and .claim.step == "OBSERVE_DESIGN_PRODUCT_RELEASE" and
-            .claim.reason == "DESIGN_PRODUCT_RELEASE_UNAVAILABLE" and .claim.unknown_class == "DIRECT_MISSING" and
-            .claim.next_operation == "FETCH_PINNED_DESIGN_PRODUCT_RELEASE" and (.claim.blocked_by | length) == 1 and
-            .summary.closed_cells == 4 and .summary.unknown_cells == 8 and .summary.refuted_cells == 0 and
-            ([.cells[] | select(.state == "UNKNOWN" and .unknown_class == "DIRECT_MISSING")] | length) == 1 and
-            ([.cells[] | select(.state == "UNKNOWN" and .unknown_class == "DEPENDENCY_BLOCKED")] | length) == 7
-          ' "$RUNNER_TEMP/unknown-output/semantic-forge-packet.json" >/dev/null
-          jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 10 and .summary.refuted_cells == 2 and .claim.reason == "SHARED_PRIMITIVE_MISMATCH"' "$RUNNER_TEMP/primitive-output/semantic-forge-packet.json" >/dev/null
-          jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 10 and .summary.refuted_cells == 2 and .claim.reason == "PRODUCT_UTILITY_LAUNDERED"' "$RUNNER_TEMP/utility-output/semantic-forge-packet.json" >/dev/null
-          jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 10 and .summary.refuted_cells == 2 and .claim.reason == "READ_ONLY_PRODUCT_AUTHORITY_ESCALATED"' "$RUNNER_TEMP/authority-output/semantic-forge-packet.json" >/dev/null
-          jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 11 and .summary.refuted_cells == 1 and .claim.reason == "GOOO_META_ACTIVITY_MISSING"' "$RUNNER_TEMP/meta-output/semantic-forge-packet.json" >/dev/null
-          jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 10 and .summary.refuted_cells == 2 and .claim.reason == "TOP_LEVEL_DECISION_UNRECOGNIZED" and ([.cells[] | select(.details | index("FIXED_POINT_INVALID"))] | length) == 1' "$RUNNER_TEMP/invalid-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision == "BUILD_READ_ONLY" and .summary.closed_cells == 12 and .summary.unknown_cells == 0 and .summary.refuted_cells == 0 and .summary.activities_bound == 12 and .summary.input_releases == {observed:4,total:4} and .summary.input_assets == {observed:5,total:5} and .outputs == {expected_total:2,expected_names:["semantic-forge-packet.json","replay.json"]} and .replay.expected_comparisons == 2 and .utility == {declarations:2,evidence:0,state:"UNKNOWN"} and .improvement.exact_before_after_pairs == {observed:0,total:1} and .improvement.state == "UNKNOWN" and ([.proofs[]|select(.closed==4 and .total==4)]|length)==3 and ([.indicator_classes[]|select(.closed==4 and .total==4)]|length)==3 and ([.cells[].activity]|unique|length)==12' "$RUNNER_TEMP/forge-a/semantic-forge-packet.json" >/dev/null
+          jq -e '.output_artifacts == {observed:2,names:["replay.json","semantic-forge-packet.json"]} and .replay.comparisons_satisfied == 2 and .replay.comparisons_total == 2 and .replay.mismatches == 0' "$RUNNER_TEMP/output-observation.json" >/dev/null
+          jq -e '.decision=="DEFER" and .summary==(.summary | .closed_cells=2 | .unknown_cells=10 | .refuted_cells=0) and (.cells[]|select(.id=="CORE_META_TOOL")|.blocked_by==[]) and (.cells[]|select(.id=="DESIGN_PRODUCT_RELEASE")|.blocked_by==["CORE_META_TOOL"])' "$RUNNER_TEMP/core-missing-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision=="DEFER" and .summary==(.summary | .closed_cells=4 | .unknown_cells=8 | .refuted_cells=0) and (.cells[]|select(.id=="LOCAL_PRODUCT_RELEASE")|.blocked_by==[]) and (.cells[]|select(.id=="DESIGN_PRODUCT_RELEASE")|.state=="CLOSED")' "$RUNNER_TEMP/local-missing-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision=="DEFER" and .summary==(.summary | .closed_cells=4 | .unknown_cells=8 | .refuted_cells=0) and .claim.unknown_class=="DIRECT_MISSING" and .claim.blocked_by==[] and ([.cells[]|select(.state=="UNKNOWN" and .unknown_class=="DIRECT_MISSING")]|length)==1 and ([.cells[]|select(.state=="UNKNOWN" and .unknown_class=="DEPENDENCY_BLOCKED")]|length)==7' "$RUNNER_TEMP/unknown-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision=="FAIL_CLOSED" and (.cells[]|select(.id=="LOCAL_PRODUCT_RELEASE")|.state=="REFUTED") and (.cells[]|select(.id=="SHARED_PRIMITIVE")|.reason=="DEPENDENCY_REFUTED")' "$RUNNER_TEMP/contradiction-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision=="FAIL_CLOSED" and ([.cells[]|select(.reason=="PRODUCT_UTILITY_LAUNDERED")]|length)==1' "$RUNNER_TEMP/utility-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision=="FAIL_CLOSED" and ([.cells[]|select(.reason=="READ_ONLY_PRODUCT_AUTHORITY_ESCALATED")]|length)==1' "$RUNNER_TEMP/authority-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision=="FAIL_CLOSED" and ([.cells[]|select(.id=="TWELVE_META_ACTIVITIES" and .state=="REFUTED")]|length)==1' "$RUNNER_TEMP/causal-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision=="FAIL_CLOSED" and ([.cells[]|select(.details | index("FIXED_POINT_INVALID"))]|length)==1' "$RUNNER_TEMP/invalid-output/semantic-forge-packet.json" >/dev/null
           scenario_evaluation_end_ns=$(date +%s%N)
           printf '%s\n' "$(( (scenario_evaluation_end_ns - scenario_evaluation_start_ns) / 1000000 ))" > "$RUNNER_TEMP/scenario-evaluation-wall-ms"
+
+          jq -S -s '
+            {schema:"gooo/semantic-forge/executed-checks/v1",checks:.,counts:{total:length,custom_forge_observation:([.[]|select(.kind=="CUSTOM_FORGE_OBSERVATION" or .kind=="CUSTOM_FORGE_CONFORMER")]|length),released_kit_conformers:([.[]|select(.kind=="RELEASED_KIT_CONFORMER")]|length),json_schema_validations:([.[]|select(.kind=="JSON_SCHEMA_VALIDATION")]|length)}}
+          ' "$checks" > "$RUNNER_TEMP/executed-checks.json"
 
           git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/repository-after.bin"
           cmp -s "$RUNNER_TEMP/repository-before.bin" "$RUNNER_TEMP/repository-after.bin"
@@ -290,97 +270,31 @@ jobs:
           total_start_ns=$(cat "$RUNNER_TEMP/semantic-forge-total-start-ns")
           total_wall_ms=$(( (total_end_ns - total_start_ns) / 1000000 ))
 
-          regular_files=0
+          regular_files=0; physical_lines=0; go_files=0; go_lines=0; gooo_files=0; gooo_lines=0
           descendant_directories=$(find . -mindepth 1 -type d -not -path './.git' -not -path './.git/*' | wc -l | tr -d ' ')
-          physical_lines=0
-          go_files=0
-          go_lines=0
-          gooo_files=0
-          gooo_lines=0
           while IFS= read -r -d '' file; do
-            if test "$file" = "./README.md"; then
-              continue
-            fi
+            if test "$file" = "./README.md"; then continue; fi
             regular_files=$((regular_files + 1))
             lines=$(wc -l < "$file" | tr -d ' ')
             physical_lines=$((physical_lines + lines))
-            case "$file" in
-              *.go) go_files=$((go_files + 1)); go_lines=$((go_lines + lines)) ;;
-              *.gooo) gooo_files=$((gooo_files + 1)); gooo_lines=$((gooo_lines + lines)) ;;
-            esac
+            case "$file" in *.go) go_files=$((go_files + 1)); go_lines=$((go_lines + lines));; *.gooo) gooo_files=$((gooo_files + 1)); gooo_lines=$((gooo_lines + lines));; esac
           done < <(find . -type f -not -path './.git/*' -print0)
 
           jq -S -n \
-            --arg subject_sha "$SUBJECT_SHA" \
-            --arg go_version "$(go version)" \
-            --arg before_digest "$before_digest" \
-            --arg after_digest "$after_digest" \
-            --argjson module_roots "$module_roots" \
-            --argjson go_fix_module_roots "$go_fix_module_roots" \
-            --argjson peak_rss_kib "$peak_rss_kib" \
-            --argjson release_receipt_verification_wall_ms "$release_receipt_verification_wall_ms" \
-            --argjson current_conformance_wall_ms "$current_conformance_wall_ms" \
-            --argjson scenario_evaluation_wall_ms "$scenario_evaluation_wall_ms" \
-            --argjson deterministic_replay_wall_ms "$deterministic_replay_wall_ms" \
-            --argjson total_wall_ms "$total_wall_ms" \
-            --slurpfile receipt_reuse "$RUNNER_TEMP/receipt-reuse.json" \
-            --argjson regular_files "$regular_files" \
-            --argjson descendant_directories "$descendant_directories" \
-            --argjson physical_lines "$physical_lines" \
-            --argjson go_files "$go_files" \
-            --argjson go_lines "$go_lines" \
-            --argjson gooo_files "$gooo_files" \
-            --argjson gooo_lines "$gooo_lines" '
-            {
-              schema:"gooo/semantic-forge/runtime-observation/v1",
-              subject_sha:$subject_sha,
-              go_version:$go_version,
-              module_roots:$module_roots,
-              go_fix_module_roots:$go_fix_module_roots,
-              repository:{before_digest:$before_digest,after_digest:$after_digest,writes:0},
-              build:{ci_build_executions:0,ci_build_wall_ms:0,reason:"NO_PRODUCT_BUILD_REQUIRED"},
-              upstream_test_receipts:$receipt_reuse[0],
-              current_subject_checks_executed:4,
-              current_cross_product_conformer_executions:1,
-              authority:{product_local_tests_run:0,cross_project_required_gates:0,common_generator_authorized:false,product_generation_authorized:false,central_orchestration_authorized:false,product_source_checkouts:0,product_source_files_read:0,product_source_lines_read:0},
-              inventory:{root_readme_excluded:true,regular_files:$regular_files,descendant_directories:$descendant_directories,physical_lines:$physical_lines,go:{files:$go_files,physical_lines:$go_lines},gooo:{files:$gooo_files,physical_lines:$gooo_lines}},
-              performance:{peak_rss_kib:$peak_rss_kib,phase_wall_ms:{release_receipt_verification:$release_receipt_verification_wall_ms,current_conformance:$current_conformance_wall_ms,scenario_evaluation:$scenario_evaluation_wall_ms,deterministic_replay:$deterministic_replay_wall_ms,total:$total_wall_ms}}
-            }
+            --arg subject_sha "$SUBJECT_SHA" --arg go_version "$(go version)" --arg before_digest "$before_digest" --arg after_digest "$after_digest" \
+            --argjson module_roots "$module_roots" --argjson go_fix_module_roots "$go_fix_module_roots" --argjson peak_rss_kib "$peak_rss_kib" \
+            --argjson release_receipt_verification_wall_ms "$release_receipt_verification_wall_ms" --argjson current_conformance_wall_ms "$current_conformance_wall_ms" --argjson scenario_evaluation_wall_ms "$scenario_evaluation_wall_ms" --argjson deterministic_replay_wall_ms "$deterministic_replay_wall_ms" --argjson total_wall_ms "$total_wall_ms" \
+            --slurpfile receipt_reuse "$RUNNER_TEMP/receipt-reuse.json" --slurpfile executed_checks "$RUNNER_TEMP/executed-checks.json" --slurpfile output_observation "$RUNNER_TEMP/output-observation.json" \
+            --argjson regular_files "$regular_files" --argjson descendant_directories "$descendant_directories" --argjson physical_lines "$physical_lines" --argjson go_files "$go_files" --argjson go_lines "$go_lines" --argjson gooo_files "$gooo_files" --argjson gooo_lines "$gooo_lines" '
+            {schema:"gooo/semantic-forge/runtime-observation/v2",subject_sha:$subject_sha,go_version:$go_version,module_roots:$module_roots,go_fix_module_roots:$go_fix_module_roots,repository:{before_digest:$before_digest,after_digest:$after_digest,writes:0},build:{ci_build_executions:0,ci_build_wall_ms:0,reason:"NO_PRODUCT_BUILD_REQUIRED"},upstream_test_receipts:$receipt_reuse[0],executed_checks:$executed_checks[0],current_subject_checks_executed:$executed_checks[0].counts.total,current_cross_product_conformer_executions:$executed_checks[0].counts.released_kit_conformers,custom_forge_observation_checks:$executed_checks[0].counts.custom_forge_observation,authority:{product_local_tests_run:0,cross_project_required_gates:0,common_generator_authorized:false,product_generation_authorized:false,central_orchestration_authorized:false,product_source_checkouts:0,product_source_files_read:0,product_source_lines_read:0},output_observation:$output_observation[0],inventory:{root_readme_excluded:true,regular_files:$regular_files,descendant_directories:$descendant_directories,physical_lines:$physical_lines,go:{files:$go_files,physical_lines:$go_lines},gooo:{files:$gooo_files,physical_lines:$gooo_lines}},performance:{peak_rss_kib:$peak_rss_kib,phase_wall_ms:{release_receipt_verification:$release_receipt_verification_wall_ms,current_conformance:$current_conformance_wall_ms,scenario_evaluation:$scenario_evaluation_wall_ms,deterministic_replay:$deterministic_replay_wall_ms,total:$total_wall_ms}}}
           ' > "$RUNNER_TEMP/runtime-observation.json"
 
-          jq -e '
-            .build == {ci_build_executions:0,ci_build_wall_ms:0,reason:"NO_PRODUCT_BUILD_REQUIRED"} and
-            .upstream_test_receipts.upstream_test_receipts_available == 2 and
-            .upstream_test_receipts.upstream_test_receipts_reused == 0 and
-            .upstream_test_receipts.reexecutions_skipped_due_to_exact_receipt == 0 and
-            .upstream_test_receipts.stale_receipts == 0 and
-            .upstream_test_receipts.unknown_receipts == 2 and
-            .current_subject_checks_executed == 4 and .current_cross_product_conformer_executions == 1 and
-            .authority.product_source_checkouts == 0 and
-            ([.performance.phase_wall_ms[] | type == "number" and . >= 0] | all)
-          ' "$RUNNER_TEMP/runtime-observation.json" >/dev/null
+          jq -e '.build == {ci_build_executions:0,ci_build_wall_ms:0,reason:"NO_PRODUCT_BUILD_REQUIRED"} and .authority.product_source_checkouts==0 and .upstream_test_receipts.upstream_test_receipts_available==2 and .upstream_test_receipts.upstream_test_receipts_reused==0 and .upstream_test_receipts.reexecutions_skipped_due_to_exact_receipt==0 and .upstream_test_receipts.stale_receipts==0 and .upstream_test_receipts.unknown_receipts==2 and .current_subject_checks_executed == (.executed_checks.checks|length) and .current_cross_product_conformer_executions == 2 and .custom_forge_observation_checks == 4 and .executed_checks.counts.json_schema_validations == 1 and ([.performance.phase_wall_ms[] | type == "number" and . >= 0] | all)' "$RUNNER_TEMP/runtime-observation.json" >/dev/null
 
           {
             echo "## Gooo Semantic Forge"
-            jq -r '
-              "- decision: \(.decision)",
-              "- cells: \(.summary.closed_cells)/\(.summary.total_cells) CLOSED; \(.summary.unknown_cells) UNKNOWN; \(.summary.refuted_cells) REFUTED",
-              "- activities: \(.summary.activities_bound)/\(.summary.activities_total)",
-              "- input releases/assets: \(.summary.input_releases.observed)/\(.summary.input_releases.total) / \(.summary.input_assets.observed)/\(.summary.input_assets.total)",
-              "- outputs/replay: \(.summary.output_artifacts.observed)/\(.summary.output_artifacts.total) / \(.summary.replay_comparisons.observed)/\(.summary.replay_comparisons.total), mismatches \(.summary.replay_comparisons.mismatches)",
-              "- utility declarations/evidence/state: \(.utility.declarations)/\(.utility.evidence) \(.utility.state)",
-              "- exact before/after: \(.improvement.exact_before_after_pairs.observed)/\(.improvement.exact_before_after_pairs.total) \(.improvement.state)",
-              "- authority writes/tests/gates: \(.authority.repository_writes)/\(.authority.product_local_tests_run)/\(.authority.cross_project_required_gates)"
-            ' "$RUNNER_TEMP/forge-a/semantic-forge-packet.json"
-            jq -r '
-              "- CI product builds/build wall time/reason: \(.build.ci_build_executions)/\(.build.ci_build_wall_ms) ms \(.build.reason)",
-              "- upstream test receipts available/reused/skipped/stale/unknown: \(.upstream_test_receipts.upstream_test_receipts_available)/\(.upstream_test_receipts.upstream_test_receipts_reused)/\(.upstream_test_receipts.reexecutions_skipped_due_to_exact_receipt)/\(.upstream_test_receipts.stale_receipts)/\(.upstream_test_receipts.unknown_receipts)",
-              "- current subject checks/cross-product conformers: \(.current_subject_checks_executed)/\(.current_cross_product_conformer_executions)",
-              "- module roots/go fix roots: \(.module_roots)/\(.go_fix_module_roots)",
-              "- inventory files/directories/lines: \(.inventory.regular_files)/\(.inventory.descendant_directories)/\(.inventory.physical_lines)",
-              "- Go files/lines, Gooo files/lines: \(.inventory.go.files)/\(.inventory.go.physical_lines), \(.inventory.gooo.files)/\(.inventory.gooo.physical_lines)",
-              "- peak RSS/phase wall ms (release/current/scenario/replay/total): \(.performance.peak_rss_kib) KiB / \(.performance.phase_wall_ms.release_receipt_verification)/\(.performance.phase_wall_ms.current_conformance)/\(.performance.phase_wall_ms.scenario_evaluation)/\(.performance.phase_wall_ms.deterministic_replay)/\(.performance.phase_wall_ms.total)"
-            ' "$RUNNER_TEMP/runtime-observation.json"
+            jq -r '"- decision: \(.decision)", "- cells: \(.summary.closed_cells)/\(.summary.total_cells) CLOSED; \(.summary.unknown_cells) UNKNOWN; \(.summary.refuted_cells) REFUTED", "- releases/assets: \(.summary.input_releases.observed)/\(.summary.input_releases.total) / \(.summary.input_assets.observed)/\(.summary.input_assets.total)", "- expected outputs: \(.outputs.expected_total); observed outputs: 2; replay: 2/2, mismatch 0"' "$RUNNER_TEMP/forge-a/semantic-forge-packet.json"
+            jq -r '"- product builds/build ms/reason: \(.build.ci_build_executions)/\(.build.ci_build_wall_ms) \(.build.reason)", "- current checks/custom-kit: \(.current_subject_checks_executed)/\(.custom_forge_observation_checks)/\(.current_cross_product_conformer_executions)", "- peak RSS/phase ms: \(.performance.peak_rss_kib) KiB / \(.performance.phase_wall_ms.release_receipt_verification)/\(.performance.phase_wall_ms.current_conformance)/\(.performance.phase_wall_ms.scenario_evaluation)/\(.performance.phase_wall_ms.deterministic_replay)/\(.performance.phase_wall_ms.total)"' "$RUNNER_TEMP/runtime-observation.json"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce no repository effect
@@ -391,13 +305,21 @@ jobs:
         with:
           name: semantic-forge-${{ env.SUBJECT_SHA }}
           path: |
+            ${{ runner.temp }}/observation-source-sha256.txt
+            ${{ runner.temp }}/observation-graph-sha256.txt
+            ${{ runner.temp }}/observation-graph.json
+            ${{ runner.temp }}/semantic-forge-input/acquisition-receipt.json
             ${{ runner.temp }}/forge-a/semantic-forge-packet.json
             ${{ runner.temp }}/forge-a/replay.json
+            ${{ runner.temp }}/output-observation.json
             ${{ runner.temp }}/runtime-observation.json
+            ${{ runner.temp }}/executed-checks.json
             ${{ runner.temp }}/receipt-reuse.json
+            ${{ runner.temp }}/core-missing-output/semantic-forge-packet.json
+            ${{ runner.temp }}/local-missing-output/semantic-forge-packet.json
             ${{ runner.temp }}/unknown-output/semantic-forge-packet.json
-            ${{ runner.temp }}/primitive-output/semantic-forge-packet.json
+            ${{ runner.temp }}/contradiction-output/semantic-forge-packet.json
             ${{ runner.temp }}/utility-output/semantic-forge-packet.json
             ${{ runner.temp }}/authority-output/semantic-forge-packet.json
-            ${{ runner.temp }}/meta-output/semantic-forge-packet.json
+            ${{ runner.temp }}/causal-output/semantic-forge-packet.json
             ${{ runner.temp }}/invalid-output/semantic-forge-packet.json
