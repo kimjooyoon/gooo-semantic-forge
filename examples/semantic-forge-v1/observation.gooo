@@ -1,0 +1,41 @@
+package semanticforgev1
+namespace semanticforgev1
+
+entity TwoConsumerBaseline id "gooo://semantic-forge/baseline/two-consumers"
+entity CoreMetaTool id "gooo://semantic-forge/core/meta-tool"
+entity LocalProductRelease id "gooo://semantic-forge/product/local-ledger"
+entity DesignProductRelease id "gooo://semantic-forge/product/design-evidence"
+entity SharedPrimitive id "gooo://semantic-forge/shared/primitive"
+entity SharedGraphShape id "gooo://semantic-forge/shared/graph-shape"
+entity SharedResolutionModel id "gooo://semantic-forge/shared/resolution-model"
+entity SharedArtifactModel id "gooo://semantic-forge/shared/artifact-model"
+entity AggregateUtilityUnknown id "gooo://semantic-forge/utility/unknown"
+entity ReadOnlyProductAuthority id "gooo://semantic-forge/authority/read-only"
+entity TwelveMetaActivities id "gooo://semantic-forge/meta/activities-12"
+entity OptionalForgeExperiment id "gooo://semantic-forge/selection/optional"
+
+entity TwoConsumerBaselineCell id "gooo://semantic-forge/cell/two-consumer-baseline"
+entity CoreMetaToolCell id "gooo://semantic-forge/cell/core-meta-tool"
+entity LocalProductReleaseCell id "gooo://semantic-forge/cell/local-product-release"
+entity DesignProductReleaseCell id "gooo://semantic-forge/cell/design-product-release"
+entity SharedPrimitiveCell id "gooo://semantic-forge/cell/shared-primitive"
+entity SharedGraphShapeCell id "gooo://semantic-forge/cell/shared-graph-shape"
+entity SharedResolutionModelCell id "gooo://semantic-forge/cell/shared-resolution-model"
+entity SharedArtifactModelCell id "gooo://semantic-forge/cell/shared-artifact-model"
+entity AggregateUtilityUnknownCell id "gooo://semantic-forge/cell/aggregate-utility-unknown"
+entity ReadOnlyProductAuthorityCell id "gooo://semantic-forge/cell/read-only-product-authority"
+entity TwelveMetaActivitiesCell id "gooo://semantic-forge/cell/twelve-meta-activities"
+entity OptionalForgeExperimentCell id "gooo://semantic-forge/cell/optional-forge-experiment"
+
+activity ObserveTwoConsumerBaseline(TwoConsumerBaseline) -> TwoConsumerBaselineCell
+activity ObserveCoreMetaTool(CoreMetaTool) -> CoreMetaToolCell
+activity ObserveLocalProductRelease(CoreMetaToolCell, LocalProductRelease) -> LocalProductReleaseCell
+activity ObserveDesignProductRelease(CoreMetaToolCell, DesignProductRelease) -> DesignProductReleaseCell
+activity BindSharedPrimitive(LocalProductReleaseCell, DesignProductReleaseCell, SharedPrimitive) -> SharedPrimitiveCell
+activity BindSharedGraphShape(LocalProductReleaseCell, DesignProductReleaseCell, SharedGraphShape) -> SharedGraphShapeCell
+activity BindSharedResolutionModel(LocalProductReleaseCell, DesignProductReleaseCell, SharedResolutionModel) -> SharedResolutionModelCell
+activity BindSharedArtifactModel(LocalProductReleaseCell, DesignProductReleaseCell, SharedArtifactModel) -> SharedArtifactModelCell
+activity PreserveAggregateUtilityUnknown(LocalProductReleaseCell, DesignProductReleaseCell, AggregateUtilityUnknown) -> AggregateUtilityUnknownCell
+activity PreserveReadOnlyProductAuthority(LocalProductReleaseCell, DesignProductReleaseCell, ReadOnlyProductAuthority) -> ReadOnlyProductAuthorityCell
+activity BindTwelveMetaActivities(TwelveMetaActivities) -> TwelveMetaActivitiesCell
+activity SelectOptionalForgeExperiment(TwoConsumerBaselineCell, CoreMetaToolCell, LocalProductReleaseCell, DesignProductReleaseCell, SharedPrimitiveCell, SharedGraphShapeCell, SharedResolutionModelCell, SharedArtifactModelCell, AggregateUtilityUnknownCell, ReadOnlyProductAuthorityCell, OptionalForgeExperiment) -> OptionalForgeExperimentCell

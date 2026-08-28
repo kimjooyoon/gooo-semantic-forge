@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gooo.dev/schemas/semantic-forge-packet-v1.schema.json",
+  "title": "Gooo Semantic Forge packet v1",
+  "type": "object",
+  "required": ["schema", "decision", "claim", "summary", "proofs", "indicator_classes", "cells", "authority", "acquisition", "utility", "improvement", "outputs", "replay"],
+  "properties": {
+    "schema": {"const": "gooo/semantic-forge/packet/v1"},
+    "decision": {"enum": ["BUILD_READ_ONLY", "DEFER", "FAIL_CLOSED"]},
+    "claim": {"type": "object", "required": ["state", "reason", "next_operation", "blocked_by"]},
+    "summary": {"type": "object", "required": ["total_cells", "closed_cells", "unknown_cells", "refuted_cells", "scenarios", "input_releases", "input_assets"]},
+    "proofs": {"type": "array", "minItems": 3, "maxItems": 3},
+    "indicator_classes": {"type": "array", "minItems": 3, "maxItems": 3},
+    "cells": {"type": "array", "minItems": 12, "maxItems": 12, "items": {"type": "object", "required": ["id", "activity", "depends_on", "state", "reason", "blocked_by"]}},
+    "authority": {"type": "object", "required": ["repository_writes", "product_local_tests_run", "cross_project_required_gates", "product_generation_authorized", "output_scope"]},
+    "acquisition": {"type": "object", "required": ["boundary", "receipt_verified", "source_sha256", "graph_sha256", "raw_assets", "members"]},
+    "utility": {"type": "object", "required": ["declarations", "evidence", "state"]},
+    "improvement": {"type": "object", "required": ["exact_before_after_pairs", "state", "reason"]},
+    "outputs": {"type": "object", "required": ["expected_total", "expected_names"]},
+    "replay": {"type": "object", "required": ["expected_comparisons", "method"]}
+  },
+  "additionalProperties": true
+}

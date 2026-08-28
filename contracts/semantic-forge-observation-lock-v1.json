@@ -1,0 +1,12 @@
+{
+  "schema": "gooo/semantic-forge/observation-lock/v1",
+  "core": {
+    "repository": "kimjooyoon/meta-ontology-go",
+    "tag": "v0.4.0-dev",
+    "binary_sha256": "3f6f34156dc959c4ae80711ff55cfbd135023fd57df673d28247e1894bf42f48"
+  },
+  "observation": {
+    "source_sha256": "22371f9547847ca044d19e245ad1ad1e693c7e9b2192d309776e774acaf8f024",
+    "graph_sha256": "1b90f7f241c34df1e9e3f89797a3989343a0c7af454a471c57a61ac1cc46c44f"
+  }
+}
