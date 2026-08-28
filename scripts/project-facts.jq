@@ -147,6 +147,7 @@ def graph_activity_count($graph): [$graph.nodes[]? | select(.kind == "Activity")
   $a.common_generator_authorized == false and
   $a.product_generation_authorized == false and
   $a.central_orchestration_authorized == false and
+  $a.product_source_checkouts == 0 and
   $a.product_source_files_read == 0 and $a.product_source_lines_read == 0
 ) as $authority_ok |
 (

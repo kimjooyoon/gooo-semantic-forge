@@ -35,7 +35,8 @@ and `command_digest` are all present and exactly match. A mismatch is
 digest, so CI records two available receipts, zero reused, zero re-executions
 skipped, zero stale, and two UNKNOWN. This is separate from the one current
 Forge cross-product conformer execution, which reads the receipts and Gooo
-activity graph without executing product code.
+activity graph without executing product code. Product-source checkout, build,
+test, read, and write counts are all zero.
 
 ## Semantic authority
 

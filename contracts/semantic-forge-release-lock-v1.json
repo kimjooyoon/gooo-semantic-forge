@@ -42,6 +42,7 @@
     }
   },
   "authority": {
+    "product_source_checkouts": 0,
     "product_source_files_read": 0,
     "product_source_lines_read": 0,
     "product_local_tests_run": 0,

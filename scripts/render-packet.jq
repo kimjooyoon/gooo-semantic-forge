@@ -67,6 +67,7 @@ def evaluate($cell):
   utility:{declarations:$f.utility.declarations, evidence:$f.utility.evidence, state:$f.utility.state},
   improvement:$f.improvement,
   authority:{
+    product_source_checkouts:$f.authority.product_source_checkouts,
     product_source_files_read:$f.authority.product_source_files_read,
     product_source_lines_read:$f.authority.product_source_lines_read,
     repository_writes:$f.authority.repository_writes,

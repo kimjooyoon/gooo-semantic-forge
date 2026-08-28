@@ -30,7 +30,8 @@ test re-execution. CI records `ci_build_executions=0`,
 `ci_build_wall_ms=0`, and `NO_PRODUCT_BUILD_REQUIRED`. Receipt reuse is CLOSED
 only when subject, contract, toolchain, and command digests are all present and
 equal. The v1 public receipts do not provide a command digest, so their reuse
-and any time-saving claim remain UNKNOWN rather than inferred.
+and any time-saving claim remain UNKNOWN rather than inferred. Product-source
+checkout, build, test, read, and write counts remain zero.
 
 The fixed 12-cell contract, immutable inputs, state rules, and authority
 boundary are defined in [the RFC](docs/rfcs/semantic-forge-v1.md).

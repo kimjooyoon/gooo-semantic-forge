@@ -107,6 +107,7 @@ jobs:
             common_generator_authorized:false,
             product_generation_authorized:false,
             central_orchestration_authorized:false,
+            product_source_checkouts:0,
             product_source_files_read:0,
             product_source_lines_read:0
           }' > "$input/authority.json"
@@ -253,7 +254,7 @@ jobs:
             .improvement.exact_before_after_pairs == {observed:0,total:1} and .improvement.state == "UNKNOWN" and
             .authority.repository_writes == 0 and .authority.product_local_tests_run == 0 and .authority.cross_project_required_gates == 0 and
             .authority.common_generator_authorized == false and .authority.product_generation_authorized == false and .authority.central_orchestration_authorized == false and
-            .authority.product_source_files_read == 0 and .authority.product_source_lines_read == 0 and
+            .authority.product_source_checkouts == 0 and .authority.product_source_files_read == 0 and .authority.product_source_lines_read == 0 and
             ([.proofs[] | select(.closed == 4 and .total == 4)] | length) == 3 and
             ([.indicator_classes[] | select(.closed == 4 and .total == 4)] | length) == 3 and
             ([.cells[].activity] | unique | length) == 12
@@ -341,7 +342,7 @@ jobs:
               upstream_test_receipts:$receipt_reuse[0],
               current_subject_checks_executed:4,
               current_cross_product_conformer_executions:1,
-              authority:{product_local_tests_run:0,cross_project_required_gates:0,common_generator_authorized:false,product_generation_authorized:false,central_orchestration_authorized:false,product_source_files_read:0,product_source_lines_read:0},
+              authority:{product_local_tests_run:0,cross_project_required_gates:0,common_generator_authorized:false,product_generation_authorized:false,central_orchestration_authorized:false,product_source_checkouts:0,product_source_files_read:0,product_source_lines_read:0},
               inventory:{root_readme_excluded:true,regular_files:$regular_files,descendant_directories:$descendant_directories,physical_lines:$physical_lines,go:{files:$go_files,physical_lines:$go_lines},gooo:{files:$gooo_files,physical_lines:$gooo_lines}},
               performance:{peak_rss_kib:$peak_rss_kib,phase_wall_ms:{release_receipt_verification:$release_receipt_verification_wall_ms,current_conformance:$current_conformance_wall_ms,scenario_evaluation:$scenario_evaluation_wall_ms,deterministic_replay:$deterministic_replay_wall_ms,total:$total_wall_ms}}
             }
@@ -355,6 +356,7 @@ jobs:
             .upstream_test_receipts.stale_receipts == 0 and
             .upstream_test_receipts.unknown_receipts == 2 and
             .current_subject_checks_executed == 4 and .current_cross_product_conformer_executions == 1 and
+            .authority.product_source_checkouts == 0 and
             ([.performance.phase_wall_ms[] | type == "number" and . >= 0] | all)
           ' "$RUNNER_TEMP/runtime-observation.json" >/dev/null
 
