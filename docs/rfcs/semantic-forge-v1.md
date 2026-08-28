@@ -22,9 +22,11 @@ The v1 lock pins only public release identities and release assets:
 - Local Ledger `v0.9.0-dev` CI artifact;
 - Design Evidence `v0.8.0-dev` CI artifact.
 
-Forge verifies release ID, tag, target commit, prerelease state, asset ID,
-asset name, asset size, and SHA-256 before extracting receipts. It never checks
-out, imports, scans, or counts product source.
+Forge requires five raw locked archives, the released receipt members, and an
+immutable acquisition receipt. It verifies release ID, tag, target commit,
+prerelease state, asset ID, asset name, asset size, archive SHA-256, and each
+receipt-member digest. It never checks out, imports, scans, or counts product
+source.
 
 The two product CI artifacts are upstream test receipts, not a request to
 rebuild or retest either product. CI reports `ci_build_executions=0` and
@@ -42,6 +44,11 @@ test, read, and write counts are all zero.
 
 The denominator has exactly twelve cells and `observation.gooo` has exactly
 twelve Gooo activities. Each cell binds to one and only one released activity.
+Every declared `depends_on` predecessor is also a pinned Gooo graph `used`
+edge from the successor activity to the predecessor cell output; every cell has
+the matching `wasGeneratedBy` edge. The source and graph SHA-256 values are
+locked with the Core release identity, so a caller-supplied graph with matching
+activity names alone is insufficient.
 The CLI, shell, and jq project and validate released receipts; they may not add
 a cell, close a cell merely because a declaration exists, or claim a semantic
 fact not bound to an activity.
@@ -53,6 +60,13 @@ REGRESSION `4/4/4` and DRIVER/OUTCOME/GUARDRAIL `4/4/4`.
 
 `REFUTED` takes precedence over `UNKNOWN`. UNKNOWN always contains `stage`,
 `step`, `reason`, `unknown_class`, `next_operation`, and `blocked_by`.
+
+The evaluator derives all propagation from denominator `depends_on`; it has no
+product-specific dependency list. A direct missing cell has `blocked_by: []`.
+Dependent UNKNOWN and REFUTED cells carry the sorted, stable, minimal frontier
+of direct predecessor cell IDs. This preserves independent Design evidence when
+Local is missing and propagates Core, Local, Design, and release contradictions
+only along their declared edges.
 
 The CI scenario contract is exactly one normal case, one direct-missing UNKNOWN
 case, and five fail-closed REFUTED cases. The direct-missing Design release
@@ -72,9 +86,12 @@ An empty caller-owned output directory receives exactly:
 1. `semantic-forge-packet.json`
 2. `replay.json`
 
-The CLI renders the packet twice from the same verified receipts, compares its
-bytes and SHA-256, and reports replay `2/2` with zero mismatches. CI invokes
-the CLI twice with the same inputs and compares both output files again.
+The packet contains the denominator's expected two output names and expected
+two replay comparisons only. The CLI renders the packet twice from the same
+verified receipts; its separate `replay.json` reports the byte/SHA-256 result.
+CI invokes the CLI twice and records actual output names, file digests, and
+outer replay comparisons in a runtime observation. Repository-root and
+repository-descendant output paths fail closed before any directory is created.
 
 ## Authority boundary
 
@@ -117,3 +134,10 @@ receipt availability/reuse, current subject checks, skipped re-executions, and
 stale receipts. Saved time and speed improvement remain UNKNOWN because no
 exact before/after pair exists. These dynamic measurements stay outside the
 deterministic packet bytes.
+
+The workflow runs for pull requests and pushes to `main`. It records an ID and
+command digest for every current check, distinguishing custom Forge observation
+checks from the two released Interchange-kit conformer executions. Packet JSON
+is validated against its Draft 2020-12 schema in Actions. An exact improvement
+pair is counted only when complete before/after evidence has the same scenario,
+input, contract, and toolchain digests; the current value remains `0/1 UNKNOWN`.

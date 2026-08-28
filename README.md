@@ -12,11 +12,12 @@ or imports product source.
 
 ## User path
 
-1. A caller downloads the pinned public release assets into a caller-owned
-   directory.
-2. `gooo-semantic-forge observe` verifies the released receipts against the
-   pinned lock and the released Gooo activity graph.
-3. It writes exactly two files to an empty caller-owned output directory:
+1. A caller supplies the five pinned raw release archives, the released receipt
+   members, and an immutable acquisition receipt in a caller-owned directory.
+2. `gooo-semantic-forge observe` verifies archive SHA-256/size, receipt-member
+   digests, the pinned Gooo source digest, and the pinned released graph digest.
+3. It writes exactly two files to an empty caller-owned output directory that
+   is outside the Forge repository:
    `semantic-forge-packet.json` and `replay.json`.
 4. The caller may review the selected experiment packet. Forge never runs it,
    edits a product, creates a pull request, merges code, or deploys anything.
@@ -32,6 +33,10 @@ only when subject, contract, toolchain, and command digests are all present and
 equal. The v1 public receipts do not provide a command digest, so their reuse
 and any time-saving claim remain UNKNOWN rather than inferred. Product-source
 checkout, build, test, read, and write counts remain zero.
+
+The packet declares only its two expected output names and expected replay
+comparison count. A separate runtime observation records the files actually
+created and the replay result, so an output never proves its own existence.
 
 The fixed 12-cell contract, immutable inputs, state rules, and authority
 boundary are defined in [the RFC](docs/rfcs/semantic-forge-v1.md).

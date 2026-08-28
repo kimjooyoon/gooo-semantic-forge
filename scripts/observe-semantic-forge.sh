@@ -12,6 +12,7 @@ inputs=$3
 requested_output=$4
 denominator="$root/contracts/semantic-forge-denominator-v1.json"
 lock="$root/contracts/semantic-forge-release-lock-v1.json"
+graph_lock="$root/contracts/semantic-forge-observation-lock-v1.json"
 observation="$root/examples/semantic-forge-v1/observation.gooo"
 
 if test -e "$requested_output"; then
@@ -32,6 +33,7 @@ test -f "$graph" || { echo "missing Gooo graph" >&2; exit 66; }
 test -d "$inputs" || { echo "missing input directory" >&2; exit 66; }
 test -f "$denominator" || { echo "missing denominator" >&2; exit 66; }
 test -f "$lock" || { echo "missing release lock" >&2; exit 66; }
+test -f "$graph_lock" || { echo "missing observation graph lock" >&2; exit 66; }
 test -f "$observation" || { echo "missing Gooo observation" >&2; exit 66; }
 test -f "$inputs/acquisition-receipt.json" || { echo "missing immutable acquisition receipt" >&2; exit 66; }
 
@@ -123,21 +125,24 @@ if all_members_match design/envelope-adoption-report.json design/envelope-facts.
 
 source_sha256=$(sha256sum "$observation" | awk '{print $1}')
 graph_sha256=$(sha256sum "$graph" | awk '{print $1}')
+if test "$source_sha256" = "$(jq -r '.observation.source_sha256' "$graph_lock")" && test "$graph_sha256" = "$(jq -r '.observation.graph_sha256' "$graph_lock")"; then pinned_source_graph=true; else pinned_source_graph=false; fi
 if jq -e \
   --arg source_sha256 "$source_sha256" --arg graph_sha256 "$graph_sha256" \
   --arg core_sha "$(jq -r '.core.assets.binary.sha256' "$lock")" \
+  --arg core_checksums_sha "$(jq -r '.core.assets.checksums.sha256' "$lock")" \
   --arg kit_sha "$(jq -r '.interchange.assets.consumer_kit.sha256' "$lock")" \
   --arg local_sha "$(jq -r '.local.assets.ci_artifact.sha256' "$lock")" \
   --arg design_sha "$(jq -r '.design.assets.ci_artifact.sha256' "$lock")" '
     .schema == "gooo/semantic-forge/immutable-acquisition-receipt/v1" and
     .observation.source_sha256 == $source_sha256 and .observation.graph_sha256 == $graph_sha256 and
-    .archives.core_binary.sha256 == $core_sha and .archives.interchange_consumer_kit.sha256 == $kit_sha and
+    .archives.core_binary.sha256 == $core_sha and .archives.core_checksums.sha256 == $core_checksums_sha and .archives.interchange_consumer_kit.sha256 == $kit_sha and
     .archives.local_ci_artifact.sha256 == $local_sha and .archives.design_ci_artifact.sha256 == $design_sha
   ' "$inputs/acquisition-receipt.json" >/dev/null; then acquisition_receipt=true; else acquisition_receipt=false; fi
 
 jq -S -n \
   --arg source_sha256 "$source_sha256" --arg graph_sha256 "$graph_sha256" \
-  --argjson acquisition_receipt "$acquisition_receipt" \
+  --argjson acquisition_receipt "$acquisition_receipt" --argjson pinned_source_graph "$pinned_source_graph" \
+  --argjson core_raw "$core_raw" --argjson core_checksums_raw "$core_checksums_raw" \
   --argjson core_assets "$core_assets" --argjson interchange_assets "$interchange_assets" \
   --argjson local_assets "$local_assets" --argjson design_assets "$design_assets" \
   --argjson core_release_member "$core_release_member" --argjson interchange_release_member "$interchange_release_member" \
@@ -145,7 +150,7 @@ jq -S -n \
   --argjson local_receipts_member "$local_receipts_member" --argjson design_release_member "$design_release_member" \
   --argjson design_receipts_member "$design_receipts_member" '
   {schema:"gooo/semantic-forge/input-integrity/v1", acquisition_receipt:$acquisition_receipt,
-   source_graph_binding:$acquisition_receipt, source_sha256:$source_sha256, graph_sha256:$graph_sha256,
+   source_graph_binding:($acquisition_receipt and $pinned_source_graph), source_sha256:$source_sha256, graph_sha256:$graph_sha256,
    raw_assets:{core:$core_assets,core_binary:$core_raw,core_checksums:$core_checksums_raw,interchange:$interchange_assets,local:$local_assets,design:$design_assets},
    members:{core_release:$core_release_member,interchange_release:$interchange_release_member,kit_manifest:$kit_manifest_member,local_release:$local_release_member,local_receipts:$local_receipts_member,design_release:$design_release_member,design_receipts:$design_receipts_member}}
 ' > "$work/input-integrity.json"
