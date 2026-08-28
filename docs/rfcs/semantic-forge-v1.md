@@ -84,6 +84,27 @@ orchestration authority are false. Forge may write only its two outputs under a
 caller-owned temporary or output directory. It may not patch products,
 automatically repair or merge changes, deploy, or invoke a product build.
 
+### Future product-generation authorization
+
+This v1 denominator can never turn `product_generation_authorized` from `0` to
+`1`: any such value is a REFUTED authority escalation. A future denominator
+version may consider `1` only after all of the following immutable evidence is
+released independently by every affected product:
+
+- a product-owned, exact-subject authorization receipt names the allowed
+  generated artifact scope and a product-owned rollback path;
+- the receipt's subject, contract, toolchain, and command digests are all
+  present and exactly match the proposed operation;
+- two independently released consumer receipts demonstrate the declared
+  utility with non-zero evidence and an exact, reproducible before/after pair;
+- the proposed operation remains opt-in for each product, with zero
+  cross-project required gates, and does not grant a common generator or
+  central orchestration authority.
+
+Each condition must be bound to a new Gooo activity and evaluated in the new
+denominator. A Forge declaration, a missing digest, a simulated counterexample,
+or an unevidenced utility claim cannot authorize the transition.
+
 ## CI-only validation
 
 GitHub Actions is the execution authority for v1. It uses Go 1.27, runs
