@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 5 ] || [ "$1" != "observe" ]; then
+  echo "usage: gooo-semantic-forge observe ROOT GOOO_GRAPH INPUT_DIRECTORY OUTPUT_DIRECTORY" >&2
+  exit 64
+fi
+
+script_dir=$(cd "$(dirname "$0")/.." && pwd)
+exec "$script_dir/scripts/observe-semantic-forge.sh" "$2" "$3" "$4" "$5"

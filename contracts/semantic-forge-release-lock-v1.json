@@ -1,0 +1,53 @@
+{
+  "schema": "gooo/semantic-forge/release-lock/v1",
+  "core": {
+    "repository": "kimjooyoon/meta-ontology-go",
+    "tag": "v0.4.0-dev",
+    "release_id": 378565653,
+    "target_commit_sha": "57ac9ec486bbca69e447a8eba94e0ce3cd03ced0",
+    "prerelease": true,
+    "assets": {
+      "binary": {"id": 533959499, "name": "gooo-linux-amd64.tar.gz", "size": 7057764, "sha256": "3f6f34156dc959c4ae80711ff55cfbd135023fd57df673d28247e1894bf42f48"},
+      "checksums": {"id": 533959512, "name": "SHA256SUMS", "size": 270, "sha256": "58f6882f9dc056af40e3892fbf8c4a702ff7123c2c7ff4fd4d1c26350297fe12"}
+    }
+  },
+  "interchange": {
+    "repository": "kimjooyoon/gooo-interchange-spec",
+    "tag": "v0.3.0-dev",
+    "release_id": 378636646,
+    "target_commit_sha": "ad3b1f4afca3cc3a8dba662804360e3fffd4aefb",
+    "prerelease": true,
+    "assets": {
+      "consumer_kit": {"id": 534100046, "name": "gooo-interchange-consumer-kit-v2.tar.gz", "size": 7230, "sha256": "a87fff90f4c80a9f8634275c7bc7c7bf2c42e5ccee7e4a686c8cff4efb33233c"}
+    }
+  },
+  "local": {
+    "repository": "kimjooyoon/gooo-local-ledger",
+    "tag": "v0.9.0-dev",
+    "release_id": 378677462,
+    "target_commit_sha": "8b01cc4bf26e0c7877dd4df89c3beab190328a1c",
+    "prerelease": true,
+    "assets": {
+      "ci_artifact": {"id": 534176148, "name": "local-released-domain-envelope-v2-ci-artifact.zip", "size": 31920, "sha256": "05473fa82ec15b90d80f619e8708957b42f41a4d8055f3d314cd9c9968d37b9e"}
+    }
+  },
+  "design": {
+    "repository": "kimjooyoon/gooo-design-evidence",
+    "tag": "v0.8.0-dev",
+    "release_id": 378665910,
+    "target_commit_sha": "c5a6a21d1e54f4bce8d6f1bd2571f2186b9bd08b",
+    "prerelease": true,
+    "assets": {
+      "ci_artifact": {"id": 534157523, "name": "design-released-domain-envelope-v2-ci-artifact.zip", "size": 31798, "sha256": "7fc242c806ed739e6dc19eb5968f4965397cd65397556532edee37695dc82871"}
+    }
+  },
+  "authority": {
+    "product_source_files_read": 0,
+    "product_source_lines_read": 0,
+    "product_local_tests_run": 0,
+    "cross_project_required_gates": 0,
+    "common_generator_authorized": false,
+    "product_generation_authorized": false,
+    "central_orchestration_authorized": false
+  }
+}

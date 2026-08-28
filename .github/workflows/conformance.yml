@@ -1,0 +1,293 @@
+name: Semantic Forge read-only conformance
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    env:
+      SUBJECT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SUBJECT_SHA }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.27.x
+          check-latest: true
+
+      - name: Bind exact pull-request identity
+        run: test "$(git rev-parse HEAD)" = "$SUBJECT_SHA"
+
+      - name: Download and verify immutable public releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          lock=contracts/semantic-forge-release-lock-v1.json
+          input="$RUNNER_TEMP/semantic-forge-input"
+          mkdir -p "$input/release" "$input/core" "$input/interchange" "$input/local" "$input/design"
+
+          fetch_release() {
+            scope=$1
+            repository=$(jq -r --arg scope "$scope" '.[$scope].repository' "$lock")
+            tag=$(jq -r --arg scope "$scope" '.[$scope].tag' "$lock")
+            target=$(jq -r --arg scope "$scope" '.[$scope].target_commit_sha' "$lock")
+            release_id=$(jq -r --arg scope "$scope" '.[$scope].release_id' "$lock")
+            prerelease=$(jq -r --arg scope "$scope" '.[$scope].prerelease' "$lock")
+            gh api "repos/$repository/releases/tags/$tag" > "$input/release/$scope.json"
+            gh api "repos/$repository/git/ref/tags/$tag" > "$RUNNER_TEMP/$scope-ref.json"
+            jq -e --arg tag "$tag" --arg target "$target" --argjson release_id "$release_id" --argjson prerelease "$prerelease" '
+              .id == $release_id and .tag_name == $tag and .target_commitish == $target and
+              .draft == false and .prerelease == $prerelease
+            ' "$input/release/$scope.json" >/dev/null
+            jq -e --arg target "$target" '.object.type == "commit" and .object.sha == $target' "$RUNNER_TEMP/$scope-ref.json" >/dev/null
+          }
+
+          download_asset() {
+            scope=$1
+            selector=$2
+            destination=$3
+            name=$(jq -r --arg scope "$scope" --arg selector "$selector" '.[$scope].assets[$selector].name' "$lock")
+            id=$(jq -r --arg scope "$scope" --arg selector "$selector" '.[$scope].assets[$selector].id' "$lock")
+            size=$(jq -r --arg scope "$scope" --arg selector "$selector" '.[$scope].assets[$selector].size' "$lock")
+            sha=$(jq -r --arg scope "$scope" --arg selector "$selector" '.[$scope].assets[$selector].sha256' "$lock")
+            jq -e --arg name "$name" --argjson id "$id" --argjson size "$size" --arg digest "sha256:$sha" '
+              any(.assets[]?; .id == $id and .name == $name and .size == $size and .digest == $digest)
+            ' "$input/release/$scope.json" >/dev/null
+            url=$(jq -r --argjson id "$id" '.assets[] | select(.id == $id) | .browser_download_url' "$input/release/$scope.json")
+            curl --fail --location --retry 3 "$url" --output "$destination"
+            test "$(wc -c < "$destination" | tr -d ' ')" -eq "$size"
+            test "$(sha256sum "$destination" | awk '{print $1}')" = "$sha"
+          }
+
+          for scope in core interchange local design; do fetch_release "$scope"; done
+          download_asset core binary "$input/core/gooo-linux-amd64.tar.gz"
+          download_asset core checksums "$input/core/SHA256SUMS"
+          download_asset interchange consumer_kit "$input/interchange/gooo-interchange-consumer-kit-v2.tar.gz"
+          download_asset local ci_artifact "$input/local/local-ci-artifact.zip"
+          download_asset design ci_artifact "$input/design/design-ci-artifact.zip"
+
+          binary_name=$(jq -r '.core.assets.binary.name' "$lock")
+          test "$(sha256sum "$input/core/gooo-linux-amd64.tar.gz" | awk '{print $1}')" = "$(awk -v name="$binary_name" '$2 == name {print $1}' "$input/core/SHA256SUMS")"
+          tar -xzf "$input/core/gooo-linux-amd64.tar.gz" -C "$input/core"
+          chmod +x "$input/core/gooo"
+          tar -xzf "$input/interchange/gooo-interchange-consumer-kit-v2.tar.gz" -C "$input/interchange"
+          unzip -q "$input/local/local-ci-artifact.zip" -d "$input/local"
+          unzip -q "$input/design/design-ci-artifact.zip" -d "$input/design"
+
+      - name: Observe only through released receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/semantic-forge-input"
+          gooo="$input/core/gooo"
+          observation=examples/semantic-forge-v1/observation.gooo
+          chmod +x bin/gooo-semantic-forge scripts/observe-semantic-forge.sh
+
+          module_roots=$(find . -name go.mod -not -path './.git/*' | wc -l | tr -d ' ')
+          go_fix_module_roots=0
+          if test "$module_roots" -gt 0; then
+            while IFS= read -r -d '' module; do
+              (cd "$(dirname "$module")" && go fix ./...)
+              go_fix_module_roots=$((go_fix_module_roots + 1))
+            done < <(find . -name go.mod -not -path './.git/*' -print0)
+          fi
+
+          "$gooo" check --json "$observation" > "$RUNNER_TEMP/observation-syntax.json"
+          "$gooo" check --semantic --json "$observation" > "$RUNNER_TEMP/observation-semantic.json"
+          "$gooo" graph dump "$observation" > "$RUNNER_TEMP/observation-graph.json"
+
+          git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/repository-before.bin"
+          probe="$RUNNER_TEMP/probe-output"
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$input" "$probe"
+          git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/repository-after-probe.bin"
+          cmp -s "$RUNNER_TEMP/repository-before.bin" "$RUNNER_TEMP/repository-after-probe.bin"
+
+          jq -S -n '{
+            schema:"gooo/semantic-forge/runtime-authority/v1",
+            repository_writes:0,
+            product_local_tests_run:0,
+            cross_project_required_gates:0,
+            common_generator_authorized:false,
+            product_generation_authorized:false,
+            central_orchestration_authorized:false,
+            product_source_files_read:0,
+            product_source_lines_read:0
+          }' > "$input/authority.json"
+
+          start_ns=$(date +%s%N)
+          /usr/bin/time -v -o "$RUNNER_TEMP/forge-time.txt" \
+            ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$input" "$RUNNER_TEMP/forge-a"
+          end_ns=$(date +%s%N)
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$input" "$RUNNER_TEMP/forge-b"
+          cmp -s "$RUNNER_TEMP/forge-a/semantic-forge-packet.json" "$RUNNER_TEMP/forge-b/semantic-forge-packet.json"
+          cmp -s "$RUNNER_TEMP/forge-a/replay.json" "$RUNNER_TEMP/forge-b/replay.json"
+
+          unknown_input="$RUNNER_TEMP/unknown-input"
+          cp -R "$input" "$unknown_input"
+          rm "$unknown_input/release/design.json"
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$unknown_input" "$RUNNER_TEMP/unknown-output"
+
+          primitive_input="$RUNNER_TEMP/primitive-input"
+          cp -R "$input" "$primitive_input"
+          jq '.core.asset_sha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"' "$primitive_input/design/immutable-inputs.json" > "$primitive_input/design/immutable-inputs.next.json"
+          mv "$primitive_input/design/immutable-inputs.next.json" "$primitive_input/design/immutable-inputs.json"
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$primitive_input" "$RUNNER_TEMP/primitive-output"
+
+          utility_input="$RUNNER_TEMP/utility-input"
+          cp -R "$input" "$utility_input"
+          jq '.adoption.external_utility.observed = 1 | .adoption.external_utility.state = "CLOSED"' "$utility_input/design/envelope-adoption-report.json" > "$utility_input/design/envelope-adoption-report.next.json"
+          mv "$utility_input/design/envelope-adoption-report.next.json" "$utility_input/design/envelope-adoption-report.json"
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$utility_input" "$RUNNER_TEMP/utility-output"
+
+          authority_input="$RUNNER_TEMP/authority-input"
+          cp -R "$input" "$authority_input"
+          jq '.authority.product_generation_authorized = true' "$authority_input/design/envelope-adoption-report.json" > "$authority_input/design/envelope-adoption-report.next.json"
+          mv "$authority_input/design/envelope-adoption-report.next.json" "$authority_input/design/envelope-adoption-report.json"
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$authority_input" "$RUNNER_TEMP/authority-output"
+
+          jq 'del(.nodes[] | select(.kind == "Activity" and .name == "BindTwelveMetaActivities"))' "$RUNNER_TEMP/observation-graph.json" > "$RUNNER_TEMP/missing-meta-graph.json"
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/missing-meta-graph.json" "$input" "$RUNNER_TEMP/meta-output"
+
+          invalid_input="$RUNNER_TEMP/invalid-input"
+          cp -R "$input" "$invalid_input"
+          jq '.decision = "UNRECOGNIZED_TOP_LEVEL_DECISION"' "$invalid_input/local/adoption-report.json" > "$invalid_input/local/adoption-report.next.json"
+          mv "$invalid_input/local/adoption-report.next.json" "$invalid_input/local/adoption-report.json"
+          jq '.adversarial.fixed_point.decision = "CLOSED"' "$invalid_input/local/final-facts.json" > "$invalid_input/local/final-facts.next.json"
+          mv "$invalid_input/local/final-facts.next.json" "$invalid_input/local/final-facts.json"
+          ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$invalid_input" "$RUNNER_TEMP/invalid-output"
+
+          jq -e '
+            .decision == "BUILD_READ_ONLY" and .claim.state == "CLOSED" and
+            .summary.closed_cells == 12 and .summary.unknown_cells == 0 and .summary.refuted_cells == 0 and
+            .summary.activities_bound == 12 and .summary.activities_total == 12 and
+            .summary.input_releases.observed == 4 and .summary.input_releases.total == 4 and
+            .summary.input_assets.observed == 5 and .summary.input_assets.total == 5 and
+            .summary.output_artifacts.observed == 2 and .summary.output_artifacts.total == 2 and
+            .summary.replay_comparisons.observed == 2 and .summary.replay_comparisons.total == 2 and .summary.replay_comparisons.mismatches == 0 and
+            .utility == {declarations:2,evidence:0,state:"UNKNOWN"} and
+            .improvement.exact_before_after_pairs == {observed:0,total:1} and .improvement.state == "UNKNOWN" and
+            .authority.repository_writes == 0 and .authority.product_local_tests_run == 0 and .authority.cross_project_required_gates == 0 and
+            .authority.common_generator_authorized == false and .authority.product_generation_authorized == false and .authority.central_orchestration_authorized == false and
+            .authority.product_source_files_read == 0 and .authority.product_source_lines_read == 0 and
+            ([.proofs[] | select(.closed == 4 and .total == 4)] | length) == 3 and
+            ([.indicator_classes[] | select(.closed == 4 and .total == 4)] | length) == 3 and
+            ([.cells[].activity] | unique | length) == 12
+          ' "$RUNNER_TEMP/forge-a/semantic-forge-packet.json" >/dev/null
+          jq -e '.comparisons_satisfied == 2 and .comparisons_total == 2 and .mismatches == 0' "$RUNNER_TEMP/forge-a/replay.json" >/dev/null
+          jq -e '
+            .decision == "DEFER" and .claim.state == "UNKNOWN" and
+            .claim.stage == "PRODUCT_RELEASE" and .claim.step == "OBSERVE_DESIGN_PRODUCT_RELEASE" and
+            .claim.reason == "DESIGN_PRODUCT_RELEASE_UNAVAILABLE" and .claim.unknown_class == "DIRECT_MISSING" and
+            .claim.next_operation == "FETCH_PINNED_DESIGN_PRODUCT_RELEASE" and (.claim.blocked_by | length) == 1 and
+            .summary.closed_cells == 4 and .summary.unknown_cells == 8 and .summary.refuted_cells == 0 and
+            ([.cells[] | select(.state == "UNKNOWN" and .unknown_class == "DIRECT_MISSING")] | length) == 1 and
+            ([.cells[] | select(.state == "UNKNOWN" and .unknown_class == "DEPENDENCY_BLOCKED")] | length) == 7
+          ' "$RUNNER_TEMP/unknown-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 10 and .summary.refuted_cells == 2 and .claim.reason == "SHARED_PRIMITIVE_MISMATCH"' "$RUNNER_TEMP/primitive-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 10 and .summary.refuted_cells == 2 and .claim.reason == "PRODUCT_UTILITY_LAUNDERED"' "$RUNNER_TEMP/utility-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 10 and .summary.refuted_cells == 2 and .claim.reason == "READ_ONLY_PRODUCT_AUTHORITY_ESCALATED"' "$RUNNER_TEMP/authority-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 11 and .summary.refuted_cells == 1 and .claim.reason == "GOOO_META_ACTIVITY_MISSING"' "$RUNNER_TEMP/meta-output/semantic-forge-packet.json" >/dev/null
+          jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 10 and .summary.refuted_cells == 2 and .claim.reason == "TOP_LEVEL_DECISION_UNRECOGNIZED" and ([.cells[] | select(.details | index("FIXED_POINT_INVALID"))] | length) == 1' "$RUNNER_TEMP/invalid-output/semantic-forge-packet.json" >/dev/null
+
+          git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/repository-after.bin"
+          cmp -s "$RUNNER_TEMP/repository-before.bin" "$RUNNER_TEMP/repository-after.bin"
+          before_digest=$(sha256sum "$RUNNER_TEMP/repository-before.bin" | awk '{print $1}')
+          after_digest=$(sha256sum "$RUNNER_TEMP/repository-after.bin" | awk '{print $1}')
+          peak_rss_kib=$(awk -F: '/Maximum resident set size/ {gsub(/ /, "", $2); print $2}' "$RUNNER_TEMP/forge-time.txt")
+          wall_ms=$(( (end_ns - start_ns) / 1000000 ))
+
+          regular_files=0
+          descendant_directories=$(find . -mindepth 1 -type d -not -path './.git' -not -path './.git/*' | wc -l | tr -d ' ')
+          physical_lines=0
+          go_files=0
+          go_lines=0
+          gooo_files=0
+          gooo_lines=0
+          while IFS= read -r -d '' file; do
+            if test "$file" = "./README.md"; then
+              continue
+            fi
+            regular_files=$((regular_files + 1))
+            lines=$(wc -l < "$file" | tr -d ' ')
+            physical_lines=$((physical_lines + lines))
+            case "$file" in
+              *.go) go_files=$((go_files + 1)); go_lines=$((go_lines + lines)) ;;
+              *.gooo) gooo_files=$((gooo_files + 1)); gooo_lines=$((gooo_lines + lines)) ;;
+            esac
+          done < <(find . -type f -not -path './.git/*' -print0)
+
+          jq -S -n \
+            --arg subject_sha "$SUBJECT_SHA" \
+            --arg go_version "$(go version)" \
+            --arg before_digest "$before_digest" \
+            --arg after_digest "$after_digest" \
+            --argjson module_roots "$module_roots" \
+            --argjson go_fix_module_roots "$go_fix_module_roots" \
+            --argjson peak_rss_kib "$peak_rss_kib" \
+            --argjson wall_ms "$wall_ms" \
+            --argjson regular_files "$regular_files" \
+            --argjson descendant_directories "$descendant_directories" \
+            --argjson physical_lines "$physical_lines" \
+            --argjson go_files "$go_files" \
+            --argjson go_lines "$go_lines" \
+            --argjson gooo_files "$gooo_files" \
+            --argjson gooo_lines "$gooo_lines" '
+            {
+              schema:"gooo/semantic-forge/runtime-observation/v1",
+              subject_sha:$subject_sha,
+              go_version:$go_version,
+              module_roots:$module_roots,
+              go_fix_module_roots:$go_fix_module_roots,
+              repository:{before_digest:$before_digest,after_digest:$after_digest,writes:0},
+              authority:{product_local_tests_run:0,cross_project_required_gates:0,common_generator_authorized:false,product_generation_authorized:false,central_orchestration_authorized:false,product_source_files_read:0,product_source_lines_read:0},
+              inventory:{root_readme_excluded:true,regular_files:$regular_files,descendant_directories:$descendant_directories,physical_lines:$physical_lines,go:{files:$go_files,physical_lines:$go_lines},gooo:{files:$gooo_files,physical_lines:$gooo_lines}},
+              performance:{peak_rss_kib:$peak_rss_kib,wall_ms:$wall_ms}
+            }
+          ' > "$RUNNER_TEMP/runtime-observation.json"
+
+          {
+            echo "## Gooo Semantic Forge"
+            jq -r '
+              "- decision: \(.decision)",
+              "- cells: \(.summary.closed_cells)/\(.summary.total_cells) CLOSED; \(.summary.unknown_cells) UNKNOWN; \(.summary.refuted_cells) REFUTED",
+              "- activities: \(.summary.activities_bound)/\(.summary.activities_total)",
+              "- input releases/assets: \(.summary.input_releases.observed)/\(.summary.input_releases.total) / \(.summary.input_assets.observed)/\(.summary.input_assets.total)",
+              "- outputs/replay: \(.summary.output_artifacts.observed)/\(.summary.output_artifacts.total) / \(.summary.replay_comparisons.observed)/\(.summary.replay_comparisons.total), mismatches \(.summary.replay_comparisons.mismatches)",
+              "- utility declarations/evidence/state: \(.utility.declarations)/\(.utility.evidence) \(.utility.state)",
+              "- exact before/after: \(.improvement.exact_before_after_pairs.observed)/\(.improvement.exact_before_after_pairs.total) \(.improvement.state)",
+              "- authority writes/tests/gates: \(.authority.repository_writes)/\(.authority.product_local_tests_run)/\(.authority.cross_project_required_gates)"
+            ' "$RUNNER_TEMP/forge-a/semantic-forge-packet.json"
+            jq -r '
+              "- module roots/go fix roots: \(.module_roots)/\(.go_fix_module_roots)",
+              "- inventory files/directories/lines: \(.inventory.regular_files)/\(.inventory.descendant_directories)/\(.inventory.physical_lines)",
+              "- Go files/lines, Gooo files/lines: \(.inventory.go.files)/\(.inventory.go.physical_lines), \(.inventory.gooo.files)/\(.inventory.gooo.physical_lines)",
+              "- peak RSS/wall time: \(.performance.peak_rss_kib) KiB / \(.performance.wall_ms) ms"
+            ' "$RUNNER_TEMP/runtime-observation.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce no repository effect
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: semantic-forge-${{ env.SUBJECT_SHA }}
+          path: |
+            ${{ runner.temp }}/forge-a/semantic-forge-packet.json
+            ${{ runner.temp }}/forge-a/replay.json
+            ${{ runner.temp }}/runtime-observation.json
+            ${{ runner.temp }}/unknown-output/semantic-forge-packet.json
+            ${{ runner.temp }}/primitive-output/semantic-forge-packet.json
+            ${{ runner.temp }}/utility-output/semantic-forge-packet.json
+            ${{ runner.temp }}/authority-output/semantic-forge-packet.json
+            ${{ runner.temp }}/meta-output/semantic-forge-packet.json
+            ${{ runner.temp }}/invalid-output/semantic-forge-packet.json

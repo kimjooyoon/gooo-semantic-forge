@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gooo.dev/schemas/semantic-forge-packet-v1.schema.json",
+  "title": "Gooo Semantic Forge packet v1",
+  "type": "object",
+  "required": ["schema", "decision", "claim", "summary", "cells", "authority", "utility", "improvement", "outputs"],
+  "properties": {
+    "schema": {"const": "gooo/semantic-forge/packet/v1"},
+    "decision": {"enum": ["BUILD_READ_ONLY", "DEFER", "FAIL_CLOSED"]},
+    "claim": {"type": "object"},
+    "summary": {"type": "object"},
+    "cells": {"type": "array", "minItems": 12, "maxItems": 12},
+    "authority": {"type": "object"},
+    "utility": {"type": "object"},
+    "improvement": {"type": "object"},
+    "outputs": {"type": "object"}
+  },
+  "additionalProperties": true
+}
