@@ -26,6 +26,17 @@ Forge verifies release ID, tag, target commit, prerelease state, asset ID,
 asset name, asset size, and SHA-256 before extracting receipts. It never checks
 out, imports, scans, or counts product source.
 
+The two product CI artifacts are upstream test receipts, not a request to
+rebuild or retest either product. CI reports `ci_build_executions=0` and
+`ci_build_wall_ms=0` with reason `NO_PRODUCT_BUILD_REQUIRED`. A receipt is
+reused only when its `subject_digest`, `contract_digest`, `toolchain_digest`,
+and `command_digest` are all present and exactly match. A mismatch is
+`STALE`; a missing digest is `UNKNOWN`. The pinned v1 artifacts lack a command
+digest, so CI records two available receipts, zero reused, zero re-executions
+skipped, zero stale, and two UNKNOWN. This is separate from the one current
+Forge cross-product conformer execution, which reads the receipts and Gooo
+activity graph without executing product code.
+
 ## Semantic authority
 
 The denominator has exactly twelve cells and `observation.gooo` has exactly
@@ -77,5 +88,10 @@ automatically repair or merge changes, deploy, or invoke a product build.
 GitHub Actions is the execution authority for v1. It uses Go 1.27, runs
 `go fix` only when this repository actually has a module root, and records the
 actual module-root count. It records root-README-excluded inventory, physical
-lines, Go and Gooo file/line counts, peak RSS, and wall time. These dynamic
-measurements stay outside the deterministic packet bytes.
+lines, Go and Gooo file/line counts, peak RSS, and actual wall milliseconds for
+release receipt verification, current conformance, scenario evaluation,
+deterministic replay, and total execution. It separately records upstream test
+receipt availability/reuse, current subject checks, skipped re-executions, and
+stale receipts. Saved time and speed improvement remain UNKNOWN because no
+exact before/after pair exists. These dynamic measurements stay outside the
+deterministic packet bytes.

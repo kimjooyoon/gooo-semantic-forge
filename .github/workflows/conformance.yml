@@ -31,6 +31,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          total_start_ns=$(date +%s%N)
+          printf '%s\n' "$total_start_ns" > "$RUNNER_TEMP/semantic-forge-total-start-ns"
+          release_receipt_verification_start_ns=$(date +%s%N)
           lock=contracts/semantic-forge-release-lock-v1.json
           input="$RUNNER_TEMP/semantic-forge-input"
           mkdir -p "$input/release" "$input/core" "$input/interchange" "$input/local" "$input/design"
@@ -82,6 +85,8 @@ jobs:
           tar -xzf "$input/interchange/gooo-interchange-consumer-kit-v2.tar.gz" -C "$input/interchange"
           unzip -q "$input/local/local-ci-artifact.zip" -d "$input/local"
           unzip -q "$input/design/design-ci-artifact.zip" -d "$input/design"
+          release_receipt_verification_end_ns=$(date +%s%N)
+          printf '%s\n' "$(( (release_receipt_verification_end_ns - release_receipt_verification_start_ns) / 1000000 ))" > "$RUNNER_TEMP/release-receipt-verification-wall-ms"
 
       - name: Observe only through released receipts
         shell: bash
@@ -91,6 +96,84 @@ jobs:
           gooo="$input/core/gooo"
           observation=examples/semantic-forge-v1/observation.gooo
           chmod +x bin/gooo-semantic-forge scripts/observe-semantic-forge.sh
+
+          # This is the current Forge-run authority observation. It is created
+          # before the conformer probe, then checked against the unchanged worktree.
+          jq -S -n '{
+            schema:"gooo/semantic-forge/runtime-authority/v1",
+            repository_writes:0,
+            product_local_tests_run:0,
+            cross_project_required_gates:0,
+            common_generator_authorized:false,
+            product_generation_authorized:false,
+            central_orchestration_authorized:false,
+            product_source_files_read:0,
+            product_source_lines_read:0
+          }' > "$input/authority.json"
+
+          # The two upstream CI artifacts are available, but their immutable
+          # receipts do not carry a command digest. Reuse therefore remains
+          # UNKNOWN: CLOSED requires all four digests to be present and equal.
+          jq -S -n \
+            --slurpfile lock contracts/semantic-forge-release-lock-v1.json \
+            --slurpfile local_report "$input/local/adoption-report.json" \
+            --slurpfile local_immutable "$input/local/immutable-inputs.json" \
+            --slurpfile design_report "$input/design/envelope-adoption-report.json" \
+            --slurpfile design_immutable "$input/design/immutable-inputs.json" '
+              ($lock[0]) as $lock |
+              def receipt($product; $subject; $contract; $toolchain; $expected_subject):
+                {
+                  product:$product,
+                  source:"UPSTREAM_RELEASED_CI_ARTIFACT",
+                  digests:{
+                    subject_digest:$subject,
+                    contract_digest:$contract,
+                    toolchain_digest:$toolchain,
+                    command_digest:null
+                  },
+                  expected:{
+                    subject_digest:$expected_subject,
+                    contract_digest:$lock.interchange.assets.consumer_kit.sha256,
+                    toolchain_digest:$lock.core.assets.binary.sha256,
+                    command_digest:"REQUIRED_BUT_NOT_PRESENT_IN_RELEASED_RECEIPT"
+                  }
+                };
+              [
+                receipt("LOCAL_PRODUCT_RELEASE"; $local_report[0].subject_sha; $local_immutable[0].kit.asset_sha256; $local_immutable[0].core.asset_sha256; $lock.local.target_commit_sha),
+                receipt("DESIGN_PRODUCT_RELEASE"; $design_report[0].subject_sha; $design_immutable[0].specification.consumer_kit_asset_sha256; $design_immutable[0].core.asset_sha256; $lock.design.target_commit_sha)
+              ] |
+              map(. as $receipt |
+                ($receipt + {
+                  comparison:{
+                    subject_digest:($receipt.digests.subject_digest != null and $receipt.digests.subject_digest == $receipt.expected.subject_digest),
+                    contract_digest:($receipt.digests.contract_digest != null and $receipt.digests.contract_digest == $receipt.expected.contract_digest),
+                    toolchain_digest:($receipt.digests.toolchain_digest != null and $receipt.digests.toolchain_digest == $receipt.expected.toolchain_digest),
+                    command_digest:false
+                  }
+                }) |
+                if .comparison.subject_digest == false or .comparison.contract_digest == false or .comparison.toolchain_digest == false then
+                  . + {state:"STALE", reuse:"NOT_REUSED", reason:"RECEIPT_DIGEST_MISMATCH"}
+                elif .digests.command_digest == null then
+                  . + {state:"UNKNOWN", reuse:"NOT_REUSED", reason:"COMMAND_DIGEST_UNAVAILABLE"}
+                elif (.comparison | [.subject_digest,.contract_digest,.toolchain_digest,.command_digest] | all) then
+                  . + {state:"CLOSED", reuse:"REUSED", reason:"EXACT_RECEIPT_MATCH"}
+                else
+                  . + {state:"STALE", reuse:"NOT_REUSED", reason:"RECEIPT_DIGEST_MISMATCH"}
+                end
+              ) as $records |
+              {
+                schema:"gooo/semantic-forge/upstream-test-receipt-reuse/v1",
+                closure_rule:"subject_digest+contract_digest+toolchain_digest+command_digest all present and equal",
+                upstream_test_receipts_available:($records | length),
+                upstream_test_receipts_reused:([$records[] | select(.state == "CLOSED")] | length),
+                reexecutions_skipped_due_to_exact_receipt:([$records[] | select(.state == "CLOSED")] | length),
+                stale_receipts:([$records[] | select(.state == "STALE")] | length),
+                unknown_receipts:([$records[] | select(.state == "UNKNOWN")] | length),
+                records:$records
+              }
+            ' > "$RUNNER_TEMP/receipt-reuse.json"
+
+          current_conformance_start_ns=$(date +%s%N)
 
           module_roots=$(find . -name go.mod -not -path './.git/*' | wc -l | tr -d ' ')
           go_fix_module_roots=0
@@ -111,26 +194,19 @@ jobs:
           git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/repository-after-probe.bin"
           cmp -s "$RUNNER_TEMP/repository-before.bin" "$RUNNER_TEMP/repository-after-probe.bin"
 
-          jq -S -n '{
-            schema:"gooo/semantic-forge/runtime-authority/v1",
-            repository_writes:0,
-            product_local_tests_run:0,
-            cross_project_required_gates:0,
-            common_generator_authorized:false,
-            product_generation_authorized:false,
-            central_orchestration_authorized:false,
-            product_source_files_read:0,
-            product_source_lines_read:0
-          }' > "$input/authority.json"
+          current_conformance_end_ns=$(date +%s%N)
+          printf '%s\n' "$(( (current_conformance_end_ns - current_conformance_start_ns) / 1000000 ))" > "$RUNNER_TEMP/current-conformance-wall-ms"
 
-          start_ns=$(date +%s%N)
+          deterministic_replay_start_ns=$(date +%s%N)
           /usr/bin/time -v -o "$RUNNER_TEMP/forge-time.txt" \
             ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$input" "$RUNNER_TEMP/forge-a"
-          end_ns=$(date +%s%N)
           ./bin/gooo-semantic-forge observe "$GITHUB_WORKSPACE" "$RUNNER_TEMP/observation-graph.json" "$input" "$RUNNER_TEMP/forge-b"
           cmp -s "$RUNNER_TEMP/forge-a/semantic-forge-packet.json" "$RUNNER_TEMP/forge-b/semantic-forge-packet.json"
           cmp -s "$RUNNER_TEMP/forge-a/replay.json" "$RUNNER_TEMP/forge-b/replay.json"
+          deterministic_replay_end_ns=$(date +%s%N)
+          printf '%s\n' "$(( (deterministic_replay_end_ns - deterministic_replay_start_ns) / 1000000 ))" > "$RUNNER_TEMP/deterministic-replay-wall-ms"
 
+          scenario_evaluation_start_ns=$(date +%s%N)
           unknown_input="$RUNNER_TEMP/unknown-input"
           cp -R "$input" "$unknown_input"
           rm "$unknown_input/release/design.json"
@@ -197,13 +273,21 @@ jobs:
           jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 10 and .summary.refuted_cells == 2 and .claim.reason == "READ_ONLY_PRODUCT_AUTHORITY_ESCALATED"' "$RUNNER_TEMP/authority-output/semantic-forge-packet.json" >/dev/null
           jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 11 and .summary.refuted_cells == 1 and .claim.reason == "GOOO_META_ACTIVITY_MISSING"' "$RUNNER_TEMP/meta-output/semantic-forge-packet.json" >/dev/null
           jq -e '.decision == "FAIL_CLOSED" and .summary.closed_cells == 10 and .summary.refuted_cells == 2 and .claim.reason == "TOP_LEVEL_DECISION_UNRECOGNIZED" and ([.cells[] | select(.details | index("FIXED_POINT_INVALID"))] | length) == 1' "$RUNNER_TEMP/invalid-output/semantic-forge-packet.json" >/dev/null
+          scenario_evaluation_end_ns=$(date +%s%N)
+          printf '%s\n' "$(( (scenario_evaluation_end_ns - scenario_evaluation_start_ns) / 1000000 ))" > "$RUNNER_TEMP/scenario-evaluation-wall-ms"
 
           git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/repository-after.bin"
           cmp -s "$RUNNER_TEMP/repository-before.bin" "$RUNNER_TEMP/repository-after.bin"
           before_digest=$(sha256sum "$RUNNER_TEMP/repository-before.bin" | awk '{print $1}')
           after_digest=$(sha256sum "$RUNNER_TEMP/repository-after.bin" | awk '{print $1}')
           peak_rss_kib=$(awk -F: '/Maximum resident set size/ {gsub(/ /, "", $2); print $2}' "$RUNNER_TEMP/forge-time.txt")
-          wall_ms=$(( (end_ns - start_ns) / 1000000 ))
+          release_receipt_verification_wall_ms=$(cat "$RUNNER_TEMP/release-receipt-verification-wall-ms")
+          current_conformance_wall_ms=$(cat "$RUNNER_TEMP/current-conformance-wall-ms")
+          scenario_evaluation_wall_ms=$(cat "$RUNNER_TEMP/scenario-evaluation-wall-ms")
+          deterministic_replay_wall_ms=$(cat "$RUNNER_TEMP/deterministic-replay-wall-ms")
+          total_end_ns=$(date +%s%N)
+          total_start_ns=$(cat "$RUNNER_TEMP/semantic-forge-total-start-ns")
+          total_wall_ms=$(( (total_end_ns - total_start_ns) / 1000000 ))
 
           regular_files=0
           descendant_directories=$(find . -mindepth 1 -type d -not -path './.git' -not -path './.git/*' | wc -l | tr -d ' ')
@@ -233,7 +317,12 @@ jobs:
             --argjson module_roots "$module_roots" \
             --argjson go_fix_module_roots "$go_fix_module_roots" \
             --argjson peak_rss_kib "$peak_rss_kib" \
-            --argjson wall_ms "$wall_ms" \
+            --argjson release_receipt_verification_wall_ms "$release_receipt_verification_wall_ms" \
+            --argjson current_conformance_wall_ms "$current_conformance_wall_ms" \
+            --argjson scenario_evaluation_wall_ms "$scenario_evaluation_wall_ms" \
+            --argjson deterministic_replay_wall_ms "$deterministic_replay_wall_ms" \
+            --argjson total_wall_ms "$total_wall_ms" \
+            --slurpfile receipt_reuse "$RUNNER_TEMP/receipt-reuse.json" \
             --argjson regular_files "$regular_files" \
             --argjson descendant_directories "$descendant_directories" \
             --argjson physical_lines "$physical_lines" \
@@ -248,11 +337,26 @@ jobs:
               module_roots:$module_roots,
               go_fix_module_roots:$go_fix_module_roots,
               repository:{before_digest:$before_digest,after_digest:$after_digest,writes:0},
+              build:{ci_build_executions:0,ci_build_wall_ms:0,reason:"NO_PRODUCT_BUILD_REQUIRED"},
+              upstream_test_receipts:$receipt_reuse[0],
+              current_subject_checks_executed:4,
+              current_cross_product_conformer_executions:1,
               authority:{product_local_tests_run:0,cross_project_required_gates:0,common_generator_authorized:false,product_generation_authorized:false,central_orchestration_authorized:false,product_source_files_read:0,product_source_lines_read:0},
               inventory:{root_readme_excluded:true,regular_files:$regular_files,descendant_directories:$descendant_directories,physical_lines:$physical_lines,go:{files:$go_files,physical_lines:$go_lines},gooo:{files:$gooo_files,physical_lines:$gooo_lines}},
-              performance:{peak_rss_kib:$peak_rss_kib,wall_ms:$wall_ms}
+              performance:{peak_rss_kib:$peak_rss_kib,phase_wall_ms:{release_receipt_verification:$release_receipt_verification_wall_ms,current_conformance:$current_conformance_wall_ms,scenario_evaluation:$scenario_evaluation_wall_ms,deterministic_replay:$deterministic_replay_wall_ms,total:$total_wall_ms}}
             }
           ' > "$RUNNER_TEMP/runtime-observation.json"
+
+          jq -e '
+            .build == {ci_build_executions:0,ci_build_wall_ms:0,reason:"NO_PRODUCT_BUILD_REQUIRED"} and
+            .upstream_test_receipts.upstream_test_receipts_available == 2 and
+            .upstream_test_receipts.upstream_test_receipts_reused == 0 and
+            .upstream_test_receipts.reexecutions_skipped_due_to_exact_receipt == 0 and
+            .upstream_test_receipts.stale_receipts == 0 and
+            .upstream_test_receipts.unknown_receipts == 2 and
+            .current_subject_checks_executed == 4 and .current_cross_product_conformer_executions == 1 and
+            ([.performance.phase_wall_ms[] | type == "number" and . >= 0] | all)
+          ' "$RUNNER_TEMP/runtime-observation.json" >/dev/null
 
           {
             echo "## Gooo Semantic Forge"
@@ -267,10 +371,13 @@ jobs:
               "- authority writes/tests/gates: \(.authority.repository_writes)/\(.authority.product_local_tests_run)/\(.authority.cross_project_required_gates)"
             ' "$RUNNER_TEMP/forge-a/semantic-forge-packet.json"
             jq -r '
+              "- CI product builds/build wall time/reason: \(.build.ci_build_executions)/\(.build.ci_build_wall_ms) ms \(.build.reason)",
+              "- upstream test receipts available/reused/skipped/stale/unknown: \(.upstream_test_receipts.upstream_test_receipts_available)/\(.upstream_test_receipts.upstream_test_receipts_reused)/\(.upstream_test_receipts.reexecutions_skipped_due_to_exact_receipt)/\(.upstream_test_receipts.stale_receipts)/\(.upstream_test_receipts.unknown_receipts)",
+              "- current subject checks/cross-product conformers: \(.current_subject_checks_executed)/\(.current_cross_product_conformer_executions)",
               "- module roots/go fix roots: \(.module_roots)/\(.go_fix_module_roots)",
               "- inventory files/directories/lines: \(.inventory.regular_files)/\(.inventory.descendant_directories)/\(.inventory.physical_lines)",
               "- Go files/lines, Gooo files/lines: \(.inventory.go.files)/\(.inventory.go.physical_lines), \(.inventory.gooo.files)/\(.inventory.gooo.physical_lines)",
-              "- peak RSS/wall time: \(.performance.peak_rss_kib) KiB / \(.performance.wall_ms) ms"
+              "- peak RSS/phase wall ms (release/current/scenario/replay/total): \(.performance.peak_rss_kib) KiB / \(.performance.phase_wall_ms.release_receipt_verification)/\(.performance.phase_wall_ms.current_conformance)/\(.performance.phase_wall_ms.scenario_evaluation)/\(.performance.phase_wall_ms.deterministic_replay)/\(.performance.phase_wall_ms.total)"
             ' "$RUNNER_TEMP/runtime-observation.json"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -285,6 +392,7 @@ jobs:
             ${{ runner.temp }}/forge-a/semantic-forge-packet.json
             ${{ runner.temp }}/forge-a/replay.json
             ${{ runner.temp }}/runtime-observation.json
+            ${{ runner.temp }}/receipt-reuse.json
             ${{ runner.temp }}/unknown-output/semantic-forge-packet.json
             ${{ runner.temp }}/primitive-output/semantic-forge-packet.json
             ${{ runner.temp }}/utility-output/semantic-forge-packet.json

@@ -25,5 +25,12 @@ Forge is optional. A product can develop and release when Forge is absent,
 unavailable, UNKNOWN, or REFUTED. Forge is not a required product CI gate and
 cross-project required gates remain zero.
 
+Forge verifies released upstream test receipts; that is not a product build or
+test re-execution. CI records `ci_build_executions=0`,
+`ci_build_wall_ms=0`, and `NO_PRODUCT_BUILD_REQUIRED`. Receipt reuse is CLOSED
+only when subject, contract, toolchain, and command digests are all present and
+equal. The v1 public receipts do not provide a command digest, so their reuse
+and any time-saving claim remain UNKNOWN rather than inferred.
+
 The fixed 12-cell contract, immutable inputs, state rules, and authority
 boundary are defined in [the RFC](docs/rfcs/semantic-forge-v1.md).
